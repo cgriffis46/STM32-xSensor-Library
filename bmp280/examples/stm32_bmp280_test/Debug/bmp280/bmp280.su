@@ -1,0 +1,34 @@
+../bmp280/bmp280.cpp:17:1:BMP280::bmp280::bmp280()	16	static
+../bmp280/bmp280.cpp:23:1:BMP280::bmp280::~bmp280()	16	static
+../bmp280/bmp280.cpp:23:1:virtual BMP280::bmp280::~bmp280()	16	static
+../bmp280/bmp280.cpp:28:6:virtual bool BMP280::bmp280::init()	16	static
+../bmp280/bmp280.cpp:30:6:virtual bool BMP280::bmp280i2c::init()	24	static
+../bmp280/bmp280.cpp:37:6:void BMP280::bmp280::main()	16	static
+../bmp280/bmp280.cpp:112:9:virtual uint8_t BMP280::bmp280::readReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	24	static
+../bmp280/bmp280.cpp:116:9:virtual uint8_t BMP280::bmp280::writeReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	24	static
+../bmp280/bmp280.cpp:120:6:virtual void BMP280::bmp280::readRegMulti(BMP280::bmp280_reg_addr_t, uint8_t*, uint8_t)	24	static
+../bmp280/bmp280.cpp:123:6:virtual void BMP280::bmp280::writeRegMulti()	16	static
+../bmp280/bmp280.cpp:126:6:void BMP280::bmp280::reset()	24	static
+../bmp280/bmp280.cpp:132:8:double BMP280::bmp280::bmp280_compensate_T_double(BMP280::BMP280_S32_t)	56	static
+../bmp280/bmp280.cpp:142:8:double BMP280::bmp280::bmp280_compensate_P_double(BMP280::BMP280_S32_t)	48	static
+../bmp280/bmp280.cpp:159:6:bool BMP280::bmp280::readIDReg()	16	static
+../bmp280/bmp280.cpp:167:6:void BMP280::bmp280::readConfigReg()	16	static
+../bmp280/bmp280.cpp:171:6:void BMP280::bmp280::readCtrlMeas()	16	static
+../bmp280/bmp280.cpp:175:6:void BMP280::bmp280::readStatusReg()	16	static
+../bmp280/bmp280.cpp:179:6:void BMP280::bmp280::readCal()	48	static
+../bmp280/bmp280.cpp:209:6:void BMP280::bmp280::setCtrlMeasReg()	16	static
+../bmp280/bmp280.cpp:220:6:void BMP280::bmp280::setConfigReg()	16	static
+../bmp280/bmp280.cpp:227:6:bool BMP280::bmp280::startMeasurement()	16	static
+../bmp280/bmp280.cpp:239:6:bool BMP280::bmp280::readTempPressure(double*, double*)	40	static
+../bmp280/bmp280.cpp:271:6:bool BMP280::bmp280::newData()	16	static
+../bmp280/bmp280.cpp:276:6:bool BMP280::bmp280::GetTemperature(double*)	16	static
+../bmp280/bmp280.cpp:282:6:bool BMP280::bmp280::GetPressure(double*)	16	static
+../bmp280/bmp280.cpp:291:1:BMP280::bmp280i2c::bmp280i2c(BMP280::bmp280_param_t)	24	static
+../bmp280/bmp280.cpp:299:1:BMP280::bmp280i2c::~bmp280i2c()	16	static
+../bmp280/bmp280.cpp:299:1:virtual BMP280::bmp280i2c::~bmp280i2c()	16	static
+../bmp280/bmp280.cpp:305:9:virtual uint8_t BMP280::bmp280i2c::readReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	40	static
+../bmp280/bmp280.cpp:311:9:virtual uint8_t BMP280::bmp280i2c::writeReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	40	static
+../bmp280/bmp280.cpp:316:6:virtual void BMP280::bmp280i2c::readRegMulti(BMP280::bmp280_reg_addr_t, uint8_t*, uint8_t)	48	static
+../bmp280/bmp280.cpp:320:6:virtual void BMP280::bmp280i2c::writeRegMulti()	16	static
+../bmp280/bmp280.cpp:323:6:virtual bool BMP280::bmp280::checkDevice()	16	static
+../bmp280/bmp280.cpp:327:6:virtual bool BMP280::bmp280i2c::checkDevice()	16	static
