@@ -60,73 +60,64 @@ typedef struct bme280_reg8_t{
 	bme280_reg8_val_t reg_value;
 }bme280_reg8_t;
 
-// defines for register masks
-#define bme280_t_sb_mask 0b11100000
-#define bme280_filter_mask 0b00011100
-#define bme_osrs_t_mask 0b11100000
-#define bme_osrs_p_mask 0b00011100
-#define bme_spi3w_en_mask 0b00000001
-#define bme_status_measuring 0b00001000
-#define bme_status_im_update 0b00000001
-
 // pressure oversampling register settings
 typedef enum bme280_osrs_p_t{
- bme280_osrs_p_skip = 0b00000000,
- bme280_osrs_p_1x = 0b00000100,
- bme280_osrs_p_2x = 0b00001000,
- bme280_osrs_p_4x = 0b00001100,
- bme280_osrs_p_8x = 0b00010000,
- bme280_osrs_p_16x = 0b00010100
+ bme280_osrs_p_skip = 0b000,
+ bme280_osrs_p_1x = 0b001,
+ bme280_osrs_p_2x = 0b010,
+ bme280_osrs_p_4x = 0b011,
+ bme280_osrs_p_8x = 0b100,
+ bme280_osrs_p_16x = 0b101
 }bme280_osrs_p_t;
 
 // temperature oversampling register settings
-typedef enum bme280_osrs_t_t {
- bme280_osrs_t_skip = 0b00000000,
- bme280_osrs_t_1x = 0b00100000,
- bme280_osrs_t_2x = 0b01000000,
- bme280_osrs_t_4x = 0b01100000,
- bme280_osrs_t_8x = 0b10000000,
- bme280_osrs_t_16x = 0b10100000
+typedef enum bme280_osrs_t_t{
+ bme280_osrs_t_skip = 0b000,
+ bme280_osrs_t_1x = 0b001,
+ bme280_osrs_t_2x = 0b010,
+ bme280_osrs_t_4x = 0b011,
+ bme280_osrs_t_8x = 0b100,
+ bme280_osrs_t_16x = 0b101
 }bme280_osrs_t_t;
 
 
 typedef enum bme280_osrs_h_t{
-	 bme280_osrs_h_skip = 0b00000000,
-	 bme280_osrs_h_1x = 0b00000001,
-	 bme280_osrs_h_2x = 0b00000010,
-	 bme280_osrs_h_4x = 0b00000011,
-	 bme280_osrs_h_8x = 0b00000100,
-	 bme280_osrs_h_16x = 0b00000101
+	 bme280_osrs_h_skip = 0b000,
+	 bme280_osrs_h_1x = 0b001,
+	 bme280_osrs_h_2x = 0b010,
+	 bme280_osrs_h_4x = 0b011,
+	 bme280_osrs_h_8x = 0b100,
+	 bme280_osrs_h_16x = 0b101
 }bme280_osrs_h_t;
 
 typedef enum bme280_mode_t{
-	bme280_sleep_mode = 0b00000000,
-	bme280_forced_mode = 0b00000010,
-	bme280_normal_mode = 0b00000011
+	bme280_sleep_mode = 0b00,
+	bme280_forced_mode = 0b10,
+	bme280_normal_mode = 0b11
 }bme280_mode_t;
 
 typedef enum bme280_sb_t{
-	bme280_sb_05 = 0b00000000,
-	bme280_sb_62 = 0b00100000,
-	bme280_sb_125 = 0b01000000,
-	bme280_sb_250 = 0b01100000,
-	bme280_sb_500 = 0b10000000,
-	bme280_sb_1000 = 0b10100000,
-	bme280_sb_2000 = 0b11000000,
-	bme280_sb_4000 = 0b11100000
+	bme280_sb_05 = 0b000,
+	bme280_sb_62 = 0b001,
+	bme280_sb_125 = 0b010,
+	bme280_sb_250 = 0b011,
+	bme280_sb_500 = 0b100,
+	bme280_sb_1000 = 0b101,
+	bme280_sb_2000 = 0b110,
+	bme280_sb_4000 = 0b111
 }bme280_sb_t;
 
 typedef enum bme280_filter_t{
-	bme280_filter_off = 0b00000000,
-	bme280_filter_x2 = 0b00000100,
-	bme280_filter_x4 = 0b00001000,
-	bme280_filter_x8 = 0b00001100,
-	bme280_filter_x16 = 0b00010000
+	bme280_filter_off = 0b00,
+	bme280_filter_x2 = 0b010,
+	bme280_filter_x4 = 0b011,
+	bme280_filter_x8 = 0b100,
+	bme280_filter_x16 = 0b101
 }bme280_filter_t;
 
 typedef enum bme280_spi_en{
-	bme280_spi_en_off = 0b00000000,
-	bme280_spi_en_on = 0b00000001
+	bme280_spi_en_off = 0b0,
+	bme280_spi_en_on = 0b1
 }bme280_spi_en;
 
 typedef enum bme280_err_t{
@@ -139,6 +130,7 @@ typedef enum bme280_err_t{
 typedef enum bme280_state_t{
 	bme280_init,
 	bme280_reset,
+	bme280_wait_im_update,
 	bme280_initializing,
 	bme280_sleeping,
 	bme280_error,
@@ -147,6 +139,17 @@ typedef enum bme280_state_t{
 	bme280_convert_measurement,
 	bme280_done
 }bme280_state_t;
+
+typedef struct bme280_param_t{
+	I2C_HandleTypeDef *_hi2c;
+	uint16_t _DevAddress;
+	bme280_osrs_p_t _osrs_p_t;
+	bme280_osrs_t_t _osrs_t_t;
+	bme280_osrs_h_t _osrs_h_t;
+	bme280_mode_t _mode_t;
+	bme280_sb_t _sb_t;
+	bme280_filter_t _filter_t;
+}bme280_param_t;
 
 class bme280 {
 public:
@@ -172,11 +175,12 @@ protected:
 	bme280_reg8_t press_lsb;
 	bme280_reg8_t press_msb;
 
-	bme280_reg8_t config;
-	bme280_reg8_t ctrl_meas;
-	bme280_reg8_t ctrl_hum;
-	bme280_reg8_t status;
-	bme280_reg8_t id;
+	//bme280_reg8_t config;
+	//bme280_reg8_t ctrl_meas;
+	//bme280_reg8_t ctrl_hum;
+	//bme280_reg8_t status;
+
+	uint8_t _id;
 	bme280_S32_t t_fine;
 
 	unsigned char dig_H1;
@@ -193,11 +197,52 @@ protected:
 	bme280_state_t bme280_state;
 
 	uint32_t last_update;
-
+	bme280_param_t _param;
 	bool _newData;
 
-	virtual uint8_t readReg8(bme280_reg8_t *bme280_reg_addr);
-	virtual uint8_t writeReg8(bme280_reg8_t *bme280_reg_addr);
+	typedef union{
+		struct{
+			uint8_t spi3w_en : 1;
+			uint8_t : 1;
+			uint8_t filter : 3;
+			uint8_t t_sb : 3;
+		}bit;
+		uint8_t reg;
+	}config_reg_t;
+	config_reg_t _config;
+
+	typedef union{
+		struct{
+			uint8_t mode : 2;   // data aquisition mode
+			uint8_t osrs_p : 3; // pressure oversampling rate
+			uint8_t osrs_t : 3; // temperature oversamping rate
+		}bit;
+		uint8_t reg;
+	}ctrl_meas_reg_t;
+	ctrl_meas_reg_t _ctrl_meas;
+
+	typedef union{
+		struct{
+			uint8_t im_update : 1; // true when the sensor is loading calibration values.
+			uint8_t : 2;
+			uint8_t measuring : 1; // true when the sensor is measuring
+			uint8_t : 4;
+		}bit;
+		uint8_t reg;
+	}status_reg_t;
+	status_reg_t _status;
+
+	typedef union{
+		struct{
+			uint8_t osrs_h : 3; // humidity oversampling rate
+			uint8_t : 5;
+		}bit;
+		uint8_t reg;
+	}ctrl_hum_reg_t;
+	ctrl_hum_reg_t _ctrl_hum;
+
+	virtual uint8_t readReg8(bme280_reg_addr_t _addr,uint8_t *buf);
+	virtual uint8_t writeReg8(bme280_reg_addr_t _addr,uint8_t *buf);
 	virtual void readRegMulti(bme280_reg_addr_t addr_t,uint8_t *buf,uint8_t numRegs);
 	virtual void writeRegMulti();
 
@@ -208,21 +253,18 @@ protected:
 	void readCal();
 	void readHumCal();
 
-	void setCtrlMeasReg(bme280_osrs_t_t osrs_t_t, bme280_osrs_p_t osrs_p_t, bme280_mode_t mode_t);
-	void setConfigReg(bme280_sb_t sb_t, bme280_filter_t filter_t, bme280_spi_en spi_en);
-	void setCtrlHumReg(bme280_osrs_h_t osrs_h_t);
+	void setCtrlMeasReg();
+	void setConfigReg();
+	void setCtrlHumReg();
 
 	double _temp,_pressure,_humidity;
-	bme280_osrs_p_t _osrs_p_t;
-	bme280_osrs_t_t _osrs_t_t;
-	bme280_osrs_h_t _osrs_h_t;
-	bme280_mode_t mode_t;
-	bme280_sb_t _sb_t;
-	bme280_filter_t _filter_t;
+
 	bme280_spi_en _spi_en;
 	bme280_S32_t adc_t, adc_p, adc_h;
 
+	//bme280_param_t _param;
 private:
+
 
 	double bme280_compensate_T_double(bme280_S32_t adc_T);
 	double bme280_compensate_P_double(bme280_S32_t adc_P);
@@ -232,14 +274,12 @@ private:
 
 class bme280i2c : public bme280{
 public:
-	bme280i2c(I2C_HandleTypeDef *hi2c, bme280_i2c_addr_t dev_addr);
+	bme280i2c(bme280_param_t param);
 	~bme280i2c();
 	bool init();
 private:
-	I2C_HandleTypeDef *_hi2c;
-	uint16_t _DevAddress;
-	uint8_t readReg8(bme280_reg8_t *bme280_reg_addr);
-	uint8_t writeReg8(bme280_reg8_t *bme280_reg_addr);
+	uint8_t readReg8(bme280_reg_addr_t _addr,uint8_t *buf);
+	uint8_t writeReg8(bme280_reg_addr_t _addr,uint8_t *buf);
 
 	void readRegMulti(bme280_reg_addr_t addr_t,uint8_t *buf,uint8_t numRegs);
 	void writeRegMulti();

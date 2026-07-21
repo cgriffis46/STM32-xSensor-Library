@@ -86,8 +86,8 @@ all: main-build
 main-build: stm32_bme280_test.elf secondary-outputs
 
 # Tool invocations
-stm32_bme280_test.elf stm32_bme280_test.map: $(OBJS) $(USER_OBJS) D:\Documents\STM32_xSensor_Library\bme280\examples\stm32_bme280_test\STM32L432KCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-g++ -o "stm32_bme280_test.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"D:\Documents\STM32_xSensor_Library\bme280\examples\stm32_bme280_test\STM32L432KCUX_FLASH.ld" -Wl,-Map="stm32_bme280_test.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
+stm32_bme280_test.elf stm32_bme280_test.map: $(OBJS) $(USER_OBJS) D:\Documents\STM32_xSensor_Library\STM32\ xSensor\ Library\bme280\examples\stm32_bme280_test\STM32L432KCUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-g++ -o "stm32_bme280_test.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"D:\Documents\STM32_xSensor_Library\STM32 xSensor Library\bme280\examples\stm32_bme280_test\STM32L432KCUX_FLASH.ld" -Wl,-Map="stm32_bme280_test.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -u _printf_float -u _scanf_float -Wl,--start-group -lc -lm -lstdc++ -lsupc++ -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 

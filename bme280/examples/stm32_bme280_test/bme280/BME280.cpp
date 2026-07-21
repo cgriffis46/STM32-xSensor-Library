@@ -14,6 +14,7 @@ uint8_t charBuffer[255];
 bme280::bme280() {
 	// TODO Auto-generated constructor stub
 	bme280_state=bme280_init;
+	last_update=HAL_GetTick();
 }
 
 bme280::~bme280() {
@@ -26,11 +27,12 @@ bool bme280::init(){return false;}
 bool bme280i2c::init(){
 	HAL_StatusTypeDef I2CStatus;
 	// check if device exists
-	I2CStatus = HAL_I2C_IsDeviceReady(this->_hi2c,this->_DevAddress,1,HAL_MAX_DELAY);
+	I2CStatus = HAL_I2C_IsDeviceReady(_param._hi2c,_param._DevAddress,1,HAL_MAX_DELAY);
 	return (HAL_OK==I2CStatus);
 }
 
 void bme280::main(){
+if(last_update>HAL_GetTick()){last_update=HAL_GetTick();}
 	switch (bme280_state){
 		case bme280_init:
 			reset();
@@ -43,26 +45,31 @@ void bme280::main(){
 			// wait 100ms after issuing Rest
 			if(HAL_GetTick()>(last_update+100)){
 				if(readIDReg()){
+					last_update=HAL_GetTick();
+					bme280_state=bme280_wait_im_update;
+				}
+			}
+			break;
+		case bme280_wait_im_update:
+			// im_update clears when BME280 completes copying calibration trim values from eeprom into the registers.
+			if(HAL_GetTick()>(last_update+10)){
+				readStatusReg();
+				if(_status.bit.im_update!=1){
 					bme280_state=bme280_initializing;
+				} else {
+					last_update=HAL_GetTick();
 				}
 			}
 			break;
 		case bme280_initializing:
-			readStatusReg();
-			if((status.reg_value&bme_status_im_update)!=bme_status_im_update) { // wait for cal values to load into register
 				readCal();
 				readHumCal();
-				_osrs_p_t = bme280_osrs_p_1x;
-				_osrs_t_t = bme280_osrs_t_1x;
-				_osrs_h_t = bme280_osrs_h_1x;
-				mode_t = bme280_forced_mode;
-				setCtrlHumReg(_osrs_h_t);
-				setConfigReg(bme280_sb_500,bme280_filter_off,bme280_spi_en_off);
-				setCtrlMeasReg(_osrs_t_t,_osrs_p_t,mode_t);
+				setCtrlHumReg();
+				setConfigReg();
+				setCtrlMeasReg();
 				last_update=HAL_GetTick();
 				bme280_state=bme280_sleeping;
-			} else{
-			}
+
 			break;
 		case bme280_start_measurement:
 			if(HAL_GetTick()>last_update+10){
@@ -98,11 +105,11 @@ void bme280::main(){
 /*
  * virtual functions overridden in bme280i2c and bme280spi child classes
  * */
-uint8_t bme280::readReg8(bme280_reg8_t *bme280_reg_addr){
+uint8_t bme280::readReg8(bme280_reg_addr_t _addr,uint8_t *buf){
 	return 0;
 }
 
-uint8_t bme280::writeReg8(bme280_reg8_t *bme280_reg_addr){
+uint8_t bme280::writeReg8(bme280_reg_addr_t _addr,uint8_t *buf){
 	return 0;
 }
 
@@ -113,8 +120,8 @@ void bme280::writeRegMulti(){
 }
 
 void bme280::reset(){
-	bme280_reg8_t bme280_reset_reg = {bme280_reg_reset_addr,bme280_reset_value};
-	writeReg8(&bme280_reset_reg);
+	uint8_t bme280_reset_reg = bme280_reset_value;
+	writeReg8(bme280_reg_reset_addr,&bme280_reset_reg);
 }
 
 /* Taken from bme280 Datasheet */
@@ -159,28 +166,23 @@ double bme280::bme280_compensate_H_double(bme280_S32_t adc_H){
 }
 
 bool bme280::readIDReg(){
-	bme280_reg8_t bme280_id_reg = {bme280_reg_id_addr,0};
-	readReg8(&bme280_id_reg);
-	if(bme280_id_reg.reg_value==bme280_id){
-		this->id.reg_value=bme280_id_reg.reg_value;
+	readReg8(bme280_reg_id_addr,&_id);
+	if(_id==bme280_id){
 		return true;
 	}
 	return false;
 }
 
 void bme280::readConfigReg(){
-	config.addr=bme280_reg_config_addr;
-	readReg8(&config);
+	readReg8(bme280_reg_config_addr,&_config.reg);
 }
 
 void bme280::readCtrlMeas(){
-	ctrl_meas.addr=bme280_reg_ctrl_meas_addr;
-	readReg8(&ctrl_meas);
+	readReg8(bme280_reg_ctrl_meas_addr,&_ctrl_meas.reg);
 }
 
 void bme280::readStatusReg(){
-	status.addr=bme280_reg_status_addr;
-	readReg8(&status);
+	readReg8(bme280_reg_status_addr,&_status.reg);
 }
 
 void bme280::readCal(){
@@ -217,9 +219,10 @@ void bme280::readCal(){
 void bme280::readHumCal(){
 	uint8_t calReg[7];
 	uint8_t temp;
-	bme280_reg8_t _dig_H1_reg = {bme280_reg_dig_H1_addr,0};
-	readReg8(&_dig_H1_reg);
-	dig_H1 = _dig_H1_reg.reg_value;
+	uint8_t _dig_H1_reg;
+
+	readReg8(bme280_reg_dig_H1_addr, &_dig_H1_reg);
+	dig_H1 = _dig_H1_reg;
 
 	readRegMulti(bme280_reg_dig_H2_addr,calReg,7);
 
@@ -243,32 +246,35 @@ void bme280::readHumCal(){
 	dig_H6 = calReg[6];
 }
 
-void bme280::setCtrlMeasReg(bme280_osrs_t_t osrs_t_t, bme280_osrs_p_t osrs_p_t, bme280_mode_t mode_t){
-	ctrl_meas.addr=bme280_reg_ctrl_meas_addr;
-	ctrl_meas.reg_value=(osrs_t_t|osrs_p_t|mode_t);
-	writeReg8(&ctrl_meas);
+void bme280::setCtrlMeasReg(){
+	//ctrl_meas.addr=bme280_reg_ctrl_meas_addr;
+	//ctrl_meas.reg_value=(osrs_t_t|osrs_p_t|mode_t);
+
+	_ctrl_meas.bit.mode=_param._mode_t;
+	_ctrl_meas.bit.osrs_p=_param._osrs_p_t;
+	_ctrl_meas.bit.osrs_t=_param._osrs_t_t;
+
+	writeReg8(bme280_reg_ctrl_meas_addr,&_ctrl_meas.reg);
 }
 
-void bme280::setConfigReg(bme280_sb_t sb_t, bme280_filter_t filter_t, bme280_spi_en spi_en){
-	this->_sb_t=sb_t;this->_filter_t=filter_t;this->_spi_en=spi_en;
-	config.addr=bme280_reg_config_addr;
-	config.reg_value=(sb_t|filter_t|spi_en);
-	writeReg8(&config);
+void bme280::setConfigReg(){
+	_config.bit.t_sb=_param._sb_t;
+	_config.bit.spi3w_en=_spi_en;
+	_config.bit.filter=_param._filter_t;
+	writeReg8(bme280_reg_config_addr,&_config.reg);
 }
 
-void bme280::setCtrlHumReg(bme280_osrs_h_t osrs_h_t){
-	this->_osrs_h_t = osrs_h_t;
-	ctrl_hum.addr = bme280_reg_ctrl_hum_addr;
-	ctrl_hum.reg_value = this->_osrs_h_t;
-	writeReg8(&ctrl_hum);
+void bme280::setCtrlHumReg(){
+	_ctrl_hum.bit.osrs_h=_param._osrs_h_t;
+	writeReg8(bme280_reg_ctrl_hum_addr,&_ctrl_hum.reg);
 }
 
 bool bme280::startMeasurement(){
 	readStatusReg();
-	if((status.reg_value&bme_status_measuring)!=bme_status_measuring){ // bme80 is not already measuring
+	if(_status.bit.measuring!=1){ // bme80 is not already measuring
 		// start forced measurement
-		mode_t=bme280_forced_mode;
-		setCtrlMeasReg(_osrs_t_t,_osrs_p_t, mode_t);
+		_param._mode_t=bme280_forced_mode;
+		setCtrlMeasReg();
 		return true;
 	}
 	else {
@@ -279,7 +285,7 @@ bool bme280::startMeasurement(){
 bool bme280::readTempPressureHum(double *t, double *p, double *h){
 	uint8_t buf[8];
 	readStatusReg();
-	if((status.reg_value&bme_status_measuring)!=bme_status_measuring){ // bme80 is already measuring
+	if((_status.bit.measuring)!=1){ // bme80 is already measuring
 		readRegMulti(bme280_reg_press_msb_addr,buf,8); // burst read temp/pressure data
 
 		this->adc_p = 0;
@@ -341,10 +347,12 @@ bool bme280::GetHumidity(double *h){
 // I2C BME280
 
 // bme280 constructor
-bme280i2c::bme280i2c(I2C_HandleTypeDef *hi2c, bme280_i2c_addr_t dev_addr){
-	this->_DevAddress = dev_addr<<1;
-	this->_hi2c = hi2c;
+bme280i2c::bme280i2c(bme280_param_t param){
+	memcpy(&this->_param,&param,sizeof(bme280_param_t));
 	bme280_state=bme280_init;
+	last_update=HAL_GetTick();
+	//_spi_en=bmp280_spi_en_off;
+	_param._DevAddress = param._DevAddress<<1;
 }
 
 bme280i2c::~bme280i2c() {
@@ -352,28 +360,18 @@ bme280i2c::~bme280i2c() {
 	delete this;
 }
 
-uint8_t bme280i2c::readReg8(bme280_reg8_t *bme280_reg){
-	uint8_t buf[1];
-	buf[0]=bme280_reg->addr;
-	buf[1]=0;
-	HAL_I2C_Master_Transmit(this->_hi2c,this->_DevAddress,buf,1,HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(this->_hi2c,this->_DevAddress,&buf[1],1,HAL_MAX_DELAY);
-	bme280_reg->reg_value=buf[1];
+uint8_t bme280i2c::readReg8(bme280_reg_addr_t _addr,uint8_t *buf){
+	HAL_I2C_Mem_Read(_param._hi2c,_param._DevAddress,_addr,(uint16_t)1, buf,(uint16_t)1, 100);
 	return 0;
 }
 
-uint8_t bme280i2c::writeReg8(bme280_reg8_t *bme280_reg){
-	uint8_t buf[2];
-	buf[0]=bme280_reg->addr;
-	buf[1]=bme280_reg->reg_value;
-	HAL_I2C_Master_Transmit(this->_hi2c,this->_DevAddress,buf,2,HAL_MAX_DELAY);
+uint8_t bme280i2c::writeReg8(bme280_reg_addr_t _addr,uint8_t *buf){
+	HAL_I2C_Mem_Write(_param._hi2c,_param._DevAddress, _addr, 1, buf, 1, 100000);
 	return 0;
 }
 
 void bme280i2c::readRegMulti(bme280_reg_addr_t addr_t,uint8_t *buf,uint8_t numRegs){
-	buf[0]=addr_t;
-	HAL_I2C_Master_Transmit(this->_hi2c,this->_DevAddress,buf,1,HAL_MAX_DELAY);
-	HAL_I2C_Master_Receive(this->_hi2c,this->_DevAddress,&buf[0],numRegs,HAL_MAX_DELAY);
+	HAL_I2C_Mem_Read(_param._hi2c,_param._DevAddress, addr_t, 1, buf, (uint16_t)numRegs, 100000);
 }
 
 void bme280i2c::writeRegMulti(){

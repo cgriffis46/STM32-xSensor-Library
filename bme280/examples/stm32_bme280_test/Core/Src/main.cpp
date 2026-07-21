@@ -78,7 +78,18 @@ uint8_t charBuffer[255];
 
 #ifdef _USE_BME280
 	using namespace BME280;
-	BME280::bme280i2c bme280_sensor(&hi2c1,bme280_i2c_addr_2);
+	bme280_param_t bme_280_param = {
+			._hi2c = &hi2c1, // I2C bus 1
+			._DevAddress=bme280_i2c_addr_2, // use I2C Address 2
+			._osrs_p_t=bme280_osrs_p_1x, // Pressure Oversamping Rate
+			._osrs_t_t=bme280_osrs_t_1x, // Temperature Oversampling Rate
+			._osrs_h_t=bme280_osrs_h_1x, // Humidity Oversampling Rate
+			._mode_t=bme280_forced_mode, // Forced Mode
+			._sb_t=bme280_sb_125, // Standby time between measurements
+			._filter_t=bme280_filter_off // IIR Filter
+	};
+
+	BME280::bme280i2c bme280_sensor(bme_280_param);
 	double bme280_temp,bme280_pressure,bme280_humidity;
 #endif
 /* USER CODE END PV */
@@ -362,7 +373,7 @@ void StartDefaultTask(void *argument)
 
           	bme280_sensor.GetTemperature(&bme280_temp);
           	bme280_sensor.GetPressure(&bme280_pressure);
-
+          	bme280_sensor.GetHumidity(&bme280_humidity);
 					   if (! isnan(bme280_temp)) {  // check if 'is not a number'
 						   bme280_temp = bme280_temp*9/5+32;
 									 /* Write temperature to Debug UART */
@@ -379,6 +390,13 @@ void StartDefaultTask(void *argument)
 					   								   } else {
 					   									 printf("Failed to read pressure");
 					   							   }
+					   if (! isnan(bme280_humidity)) {  // check if 'is not a number'
+					   					   									 /* Write temperature to Debug UART */
+					   					   									 sprintf((char*)charBuffer,"humidity: %f %\t\n",bme280_humidity);
+					   					   									 HAL_UART_Transmit(&huart2,charBuffer,strlen((char*)charBuffer),HAL_MAX_DELAY);
+					   					   								   } else {
+					   					   									 printf("Failed to read humidity");
+					   					   							   }
            }
 
 #endif

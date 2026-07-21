@@ -39,7 +39,7 @@ Core/Src/main.o: ../Core/Src/main.cpp ../Core/Inc/main.h \
  C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Party/FreeRTOS/Source/include/task.h \
  C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Party/FreeRTOS/Source/include/list.h \
  C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h \
- D:/Documents/STM32_xSensor_Library/bme280/inc/bme280.h
+ D:/Documents/STM32_xSensor_Library/STM32\ xSensor\ Library/bme280/examples/stm32_bme280_test/bme280/bme280.h
 ../Core/Inc/main.h:
 C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal.h:
 ../Core/Inc/stm32l4xx_hal_conf.h:
@@ -81,4 +81,4 @@ C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Pa
 C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Party/FreeRTOS/Source/include/task.h:
 C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Party/FreeRTOS/Source/include/list.h:
 C:/Users/coryg/STM32Cube/Repository/STM32Cube_FW_L4_V1.18.2/Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2/cmsis_os2.h:
-D:/Documents/STM32_xSensor_Library/bme280/inc/bme280.h:
+D:/Documents/STM32_xSensor_Library/STM32\ xSensor\ Library/bme280/examples/stm32_bme280_test/bme280/bme280.h:

@@ -304,7 +304,6 @@ bmp280i2c::~bmp280i2c() {
 
 uint8_t bmp280i2c::readReg8(bmp280_reg_addr_t _addr,uint8_t *buf){
 	HAL_I2C_Mem_Read(_param._hi2c,_param._DevAddress,_addr,(uint16_t)1, buf,(uint16_t)1, 100);
-
 	return 0;
 }
 
