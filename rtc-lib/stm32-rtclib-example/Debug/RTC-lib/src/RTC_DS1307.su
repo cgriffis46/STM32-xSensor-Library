@@ -1,0 +1,19 @@
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:165:12:uint16_t DateTime::year() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:170:11:uint8_t DateTime::month() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:175:11:uint8_t DateTime::day() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:180:11:uint8_t DateTime::hour() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:192:11:uint8_t DateTime::minute() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:197:11:uint8_t DateTime::second() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:348:18:static uint8_t RTC_I2C::bcd2bin(uint8_t)	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:354:18:static uint8_t RTC_I2C::bin2bcd(uint8_t)	16	static
+../RTC-lib/src/RTC_DS1307.cpp:7:1:RTC_DS1307::RTC_DS1307(I2C_HandleTypeDef*)	16	static
+../RTC-lib/src/RTC_DS1307.cpp:18:6:bool RTC_DS1307::begin(uint8_t)	16	static
+../RTC-lib/src/RTC_DS1307.cpp:29:9:uint8_t RTC_DS1307::isrunning()	16	static
+../RTC-lib/src/RTC_DS1307.cpp:37:6:void RTC_DS1307::adjust(const DateTime&)	32	static
+../RTC-lib/src/RTC_DS1307.cpp:56:10:DateTime RTC_DS1307::now()	64	static
+../RTC-lib/src/RTC_DS1307.cpp:74:18:Ds1307SqwPinMode RTC_DS1307::readSqwPinMode()	16	static
+../RTC-lib/src/RTC_DS1307.cpp:84:6:void RTC_DS1307::writeSqwPinMode(Ds1307SqwPinMode)	16	static
+../RTC-lib/src/RTC_DS1307.cpp:97:6:void RTC_DS1307::readnvram(uint8_t*, uint8_t, uint8_t)	40	static
+../RTC-lib/src/RTC_DS1307.cpp:114:6:void RTC_DS1307::writenvram(uint8_t, uint8_t*, uint8_t)	40	static
+../RTC-lib/src/RTC_DS1307.cpp:132:9:uint8_t RTC_DS1307::readnvram(uint8_t)	24	static
+../RTC-lib/src/RTC_DS1307.cpp:145:6:void RTC_DS1307::writenvram(uint8_t, uint8_t)	16	static

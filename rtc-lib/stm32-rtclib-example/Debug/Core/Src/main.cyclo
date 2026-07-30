@@ -1,0 +1,13 @@
+../Core/Src/../../RTC-lib/include/RTClib.h:180:11:uint8_t DateTime::hour() const	1
+../Core/Src/../../RTC-lib/include/RTClib.h:192:11:uint8_t DateTime::minute() const	1
+../Core/Src/../../RTC-lib/include/RTClib.h:197:11:uint8_t DateTime::second() const	1
+../Core/Src/main.cpp:93:5:int main()	1
+../Core/Src/main.cpp:179:6:void SystemClock_Config()	4
+../Core/Src/main.cpp:225:13:void MX_I2C1_Init()	4
+../Core/Src/main.cpp:273:13:void MX_RTC_Init()	4
+../Core/Src/main.cpp:337:13:void MX_USART1_UART_Init()	2
+../Core/Src/main.cpp:372:13:void MX_GPIO_Init()	1
+../Core/Src/main.cpp:399:6:void StartDefaultTask(void*)	1
+../Core/Src/main.cpp:422:6:void Error_Handler()	1
+../Core/Src/main.cpp:431:1:void __static_initialization_and_destruction_0()	1
+../Core/Src/main.cpp:431:1:cpp)	1

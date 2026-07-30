@@ -1,0 +1,15 @@
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:97:10:BSP_GetVersion	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:109:6:BSP_LED_Init	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:133:6:BSP_LED_On	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:145:6:BSP_LED_Off	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:157:6:BSP_LED_Toggle	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:180:6:I2C1_Init	2
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:207:6:I2C1_Write	2
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:227:9:I2C1_Read	2
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:252:19:I2C1_ReadBuffer	2
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:274:19:I2C1_IsDeviceReady	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:288:19:I2C1_WriteBuffer	2
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:307:6:I2C1_Error	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:321:6:I2C1_MspInit	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:383:19:BSP_DIGIT4_SEG7_Init	1
+../Drivers/BSP/STM32L4xx_Nucleo_32/stm32l4xx_nucleo_32.c:401:19:BSP_DIGIT4_SEG7_Display	2

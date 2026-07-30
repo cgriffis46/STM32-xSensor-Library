@@ -28,6 +28,7 @@
 
 #define _USE_BMP280
 #include "bmp280.h"
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/

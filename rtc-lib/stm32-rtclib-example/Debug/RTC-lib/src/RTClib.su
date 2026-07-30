@@ -1,0 +1,35 @@
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:165:12:uint16_t DateTime::year() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:170:11:uint8_t DateTime::month() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:175:11:uint8_t DateTime::day() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:180:11:uint8_t DateTime::hour() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:192:11:uint8_t DateTime::minute() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:197:11:uint8_t DateTime::second() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:326:11:int32_t TimeSpan::totalseconds() const	16	static
+../RTC-lib/src/RTClib.cpp:63:6:void RTC_I2C::write_register(uint8_t, uint8_t)	32	static
+../RTC-lib/src/RTClib.cpp:77:9:uint8_t RTC_I2C::read_register(uint8_t)	32	static
+../RTC-lib/src/RTClib.cpp:111:17:uint16_t date2days(uint16_t, uint8_t, uint8_t)	24	static
+../RTC-lib/src/RTClib.cpp:133:17:uint32_t time2ulong(uint16_t, uint8_t, uint8_t, uint8_t)	16	static
+../RTC-lib/src/RTClib.cpp:165:1:DateTime::DateTime(uint32_t)	24	static
+../RTC-lib/src/RTClib.cpp:206:1:DateTime::DateTime(uint16_t, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t)	16	static
+../RTC-lib/src/RTClib.cpp:224:1:DateTime::DateTime(const DateTime&)	16	static
+../RTC-lib/src/RTClib.cpp:235:16:uint8_t conv2d(const char*)	24	static
+../RTC-lib/src/RTClib.cpp:261:1:DateTime::DateTime(const char*, const char*)	24	static
+../RTC-lib/src/RTClib.cpp:375:1:DateTime::DateTime(const char*)	48	static
+../RTC-lib/src/RTClib.cpp:392:6:bool DateTime::isValid() const	24	static
+../RTC-lib/src/RTClib.cpp:447:7:char* DateTime::toString(char*) const	40	static
+../RTC-lib/src/RTClib.cpp:543:9:uint8_t DateTime::twelveHour() const	16	static
+../RTC-lib/src/RTClib.cpp:559:9:uint8_t DateTime::dayOfTheWeek() const	24	static
+../RTC-lib/src/RTClib.cpp:574:10:uint32_t DateTime::unixtime() const	24	static
+../RTC-lib/src/RTClib.cpp:596:10:uint32_t DateTime::secondstime() const	24	static
+../RTC-lib/src/RTClib.cpp:610:10:DateTime DateTime::operator+(const TimeSpan&) const	32	static
+../RTC-lib/src/RTClib.cpp:621:10:DateTime DateTime::operator-(const TimeSpan&) const	32	static
+../RTC-lib/src/RTClib.cpp:637:10:TimeSpan DateTime::operator-(const DateTime&) const	32	static
+../RTC-lib/src/RTClib.cpp:653:6:bool DateTime::operator<(const DateTime&) const	24	static
+../RTC-lib/src/RTClib.cpp:677:6:bool DateTime::operator==(const DateTime&) const	16	static
+../RTC-lib/src/RTClib.cpp:698:6:void DateTime::timestamp(timestampOpt, TimeStampString*) const	56	static
+../RTC-lib/src/RTClib.cpp:725:1:TimeSpan::TimeSpan(int32_t)	16	static
+../RTC-lib/src/RTClib.cpp:738:1:TimeSpan::TimeSpan(int16_t, int8_t, int8_t, int8_t)	16	static
+../RTC-lib/src/RTClib.cpp:748:1:TimeSpan::TimeSpan(const TimeSpan&)	16	static
+../RTC-lib/src/RTClib.cpp:757:10:TimeSpan TimeSpan::operator+(const TimeSpan&) const	24	static
+../RTC-lib/src/RTClib.cpp:768:10:TimeSpan TimeSpan::operator-(const TimeSpan&) const	24	static
+../RTC-lib/src/RTClib.cpp:772:8:size_t DateTime::min(size_t, size_t)	24	static

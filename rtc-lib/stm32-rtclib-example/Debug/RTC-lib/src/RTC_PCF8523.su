@@ -1,0 +1,28 @@
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:165:12:uint16_t DateTime::year() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:170:11:uint8_t DateTime::month() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:175:11:uint8_t DateTime::day() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:180:11:uint8_t DateTime::hour() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:192:11:uint8_t DateTime::minute() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:197:11:uint8_t DateTime::second() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:348:18:static uint8_t RTC_I2C::bcd2bin(uint8_t)	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:354:18:static uint8_t RTC_I2C::bin2bcd(uint8_t)	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:13:1:RTC_PCF8523::RTC_PCF8523(I2C_HandleTypeDef*)	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:24:6:bool RTC_PCF8523::begin(uint8_t, uint8_t)	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:46:6:bool RTC_PCF8523::lostPower()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:57:6:bool RTC_PCF8523::initialized()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:67:6:void RTC_PCF8523::adjust(const DateTime&)	32	static
+../RTC-lib/src/RTC_PCF8523.cpp:89:10:DateTime RTC_PCF8523::now()	64	static
+../RTC-lib/src/RTC_PCF8523.cpp:109:6:void RTC_PCF8523::start()	24	static
+../RTC-lib/src/RTC_PCF8523.cpp:120:6:void RTC_PCF8523::stop()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:131:9:uint8_t RTC_PCF8523::isrunning()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:141:19:Pcf8523SqwPinMode RTC_PCF8523::readSqwPinMode()	24	static
+../RTC-lib/src/RTC_PCF8523.cpp:154:6:void RTC_PCF8523::writeSqwPinMode(Pcf8523SqwPinMode)	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:164:6:void RTC_PCF8523::enableSecondTimer()	24	static
+../RTC-lib/src/RTC_PCF8523.cpp:178:6:void RTC_PCF8523::disableSecondTimer()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:198:6:void RTC_PCF8523::enableCountdownTimer(PCF8523TimerClockFreq, uint8_t, uint8_t)	24	static
+../RTC-lib/src/RTC_PCF8523.cpp:231:6:void RTC_PCF8523::enableCountdownTimer(PCF8523TimerClockFreq, uint8_t)	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:249:6:void RTC_PCF8523::disableCountdownTimer()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:262:6:void RTC_PCF8523::deconfigureAllTimers()	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:302:6:void RTC_PCF8523::calibrate(Pcf8523OffsetMode, int8_t)	16	static
+../RTC-lib/src/RTC_PCF8523.cpp:313:6:void RTC_PCF8523::write_register(uint8_t, uint8_t)	32	static
+../RTC-lib/src/RTC_PCF8523.cpp:329:9:uint8_t RTC_PCF8523::read_register(uint8_t)	32	static

@@ -1,0 +1,6 @@
+../Core/Src/main.cpp:81:5:int main()	1
+../Core/Src/main.cpp:165:6:void SystemClock_Config()	4
+../Core/Src/main.cpp:216:13:void MX_I2C1_Init()	4
+../Core/Src/main.cpp:264:13:void MX_GPIO_Init()	1
+../Core/Src/main.cpp:318:6:void StartDefaultTask(void*)	1
+../Core/Src/main.cpp:333:6:void Error_Handler()	1

@@ -1,0 +1,20 @@
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:165:12:uint16_t DateTime::year() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:170:11:uint8_t DateTime::month() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:175:11:uint8_t DateTime::day() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:180:11:uint8_t DateTime::hour() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:192:11:uint8_t DateTime::minute() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:197:11:uint8_t DateTime::second() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:348:18:static uint8_t RTC_I2C::bcd2bin(uint8_t)	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:354:18:static uint8_t RTC_I2C::bin2bcd(uint8_t)	16	static
+../RTC-lib/src/RTC_PCF8563.cpp:13:1:RTC_PCF8563::RTC_PCF8563(I2C_HandleTypeDef*)	16	static
+../RTC-lib/src/RTC_PCF8563.cpp:24:6:bool RTC_PCF8563::begin(uint8_t, uint8_t)	16	static
+../RTC-lib/src/RTC_PCF8563.cpp:45:6:bool RTC_PCF8563::lostPower()	16	static
+../RTC-lib/src/RTC_PCF8563.cpp:55:6:void RTC_PCF8563::adjust(const DateTime&)	32	static
+../RTC-lib/src/RTC_PCF8563.cpp:73:10:DateTime RTC_PCF8563::now()	64	static
+../RTC-lib/src/RTC_PCF8563.cpp:94:6:void RTC_PCF8563::start()	24	static
+../RTC-lib/src/RTC_PCF8563.cpp:105:6:void RTC_PCF8563::stop()	24	static
+../RTC-lib/src/RTC_PCF8563.cpp:117:9:uint8_t RTC_PCF8563::isrunning()	16	static
+../RTC-lib/src/RTC_PCF8563.cpp:127:19:Pcf8563SqwPinMode RTC_PCF8563::readSqwPinMode()	24	static
+../RTC-lib/src/RTC_PCF8563.cpp:138:6:void RTC_PCF8563::writeSqwPinMode(Pcf8563SqwPinMode)	16	static
+../RTC-lib/src/RTC_PCF8563.cpp:149:6:void RTC_PCF8563::write_register(uint8_t, uint8_t)	32	static
+../RTC-lib/src/RTC_PCF8563.cpp:163:9:uint8_t RTC_PCF8563::read_register(uint8_t)	32	static

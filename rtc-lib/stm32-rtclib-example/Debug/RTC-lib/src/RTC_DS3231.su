@@ -1,0 +1,29 @@
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:165:12:uint16_t DateTime::year() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:170:11:uint8_t DateTime::month() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:175:11:uint8_t DateTime::day() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:180:11:uint8_t DateTime::hour() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:192:11:uint8_t DateTime::minute() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:197:11:uint8_t DateTime::second() const	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:348:18:static uint8_t RTC_I2C::bcd2bin(uint8_t)	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:354:18:static uint8_t RTC_I2C::bin2bcd(uint8_t)	16	static
+D:/Documents/STM32_xSensor_Library/STM32 xSensor Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:416:18:static uint8_t RTC_DS3231::dowToDS3231(uint8_t)	16	static
+../RTC-lib/src/RTC_DS3231.cpp:14:1:RTC_DS3231::RTC_DS3231(I2C_HandleTypeDef*)	16	static
+../RTC-lib/src/RTC_DS3231.cpp:18:6:bool RTC_DS3231::begin(uint8_t)	16	static
+../RTC-lib/src/RTC_DS3231.cpp:32:6:bool RTC_DS3231::lostPower()	16	static
+../RTC-lib/src/RTC_DS3231.cpp:42:6:void RTC_DS3231::adjust(const DateTime&)	40	static
+../RTC-lib/src/RTC_DS3231.cpp:66:10:DateTime RTC_DS3231::now()	64	static
+../RTC-lib/src/RTC_DS3231.cpp:86:18:Ds3231SqwPinMode RTC_DS3231::readSqwPinMode()	24	static
+../RTC-lib/src/RTC_DS3231.cpp:100:6:void RTC_DS3231::writeSqwPinMode(Ds3231SqwPinMode)	24	static
+../RTC-lib/src/RTC_DS3231.cpp:115:7:float RTC_DS3231::getTemperature()	32	static
+../RTC-lib/src/RTC_DS3231.cpp:136:6:bool RTC_DS3231::setAlarm1(const DateTime&, Ds3231Alarm1Mode)	48	static
+../RTC-lib/src/RTC_DS3231.cpp:171:6:bool RTC_DS3231::setAlarm2(const DateTime&, Ds3231Alarm2Mode)	48	static
+../RTC-lib/src/RTC_DS3231.cpp:203:10:DateTime RTC_DS3231::getAlarm1()	48	static
+../RTC-lib/src/RTC_DS3231.cpp:246:10:DateTime RTC_DS3231::getAlarm2()	40	static
+../RTC-lib/src/RTC_DS3231.cpp:284:18:Ds3231Alarm1Mode RTC_DS3231::getAlarm1Mode()	32	static
+../RTC-lib/src/RTC_DS3231.cpp:319:18:Ds3231Alarm2Mode RTC_DS3231::getAlarm2Mode()	24	static
+../RTC-lib/src/RTC_DS3231.cpp:348:6:void RTC_DS3231::disableAlarm(uint8_t)	24	static
+../RTC-lib/src/RTC_DS3231.cpp:360:6:void RTC_DS3231::clearAlarm(uint8_t)	24	static
+../RTC-lib/src/RTC_DS3231.cpp:373:6:bool RTC_DS3231::alarmFired(uint8_t)	16	static
+../RTC-lib/src/RTC_DS3231.cpp:384:6:void RTC_DS3231::enable32K()	24	static
+../RTC-lib/src/RTC_DS3231.cpp:395:6:void RTC_DS3231::disable32K()	24	static
+../RTC-lib/src/RTC_DS3231.cpp:407:6:bool RTC_DS3231::isEnabled32K()	16	static

@@ -27,8 +27,8 @@
 ../bmp280/bmp280.cpp:299:1:BMP280::bmp280i2c::~bmp280i2c()	2
 ../bmp280/bmp280.cpp:299:1:virtual BMP280::bmp280i2c::~bmp280i2c()	1
 ../bmp280/bmp280.cpp:305:9:virtual uint8_t BMP280::bmp280i2c::readReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	1
-../bmp280/bmp280.cpp:311:9:virtual uint8_t BMP280::bmp280i2c::writeReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	1
-../bmp280/bmp280.cpp:316:6:virtual void BMP280::bmp280i2c::readRegMulti(BMP280::bmp280_reg_addr_t, uint8_t*, uint8_t)	1
-../bmp280/bmp280.cpp:320:6:virtual void BMP280::bmp280i2c::writeRegMulti()	1
-../bmp280/bmp280.cpp:323:6:virtual bool BMP280::bmp280::checkDevice()	1
-../bmp280/bmp280.cpp:327:6:virtual bool BMP280::bmp280i2c::checkDevice()	2
+../bmp280/bmp280.cpp:310:9:virtual uint8_t BMP280::bmp280i2c::writeReg8(BMP280::bmp280_reg_addr_t, uint8_t*)	1
+../bmp280/bmp280.cpp:315:6:virtual void BMP280::bmp280i2c::readRegMulti(BMP280::bmp280_reg_addr_t, uint8_t*, uint8_t)	1
+../bmp280/bmp280.cpp:319:6:virtual void BMP280::bmp280i2c::writeRegMulti()	1
+../bmp280/bmp280.cpp:322:6:virtual bool BMP280::bmp280::checkDevice()	1
+../bmp280/bmp280.cpp:326:6:virtual bool BMP280::bmp280i2c::checkDevice()	2

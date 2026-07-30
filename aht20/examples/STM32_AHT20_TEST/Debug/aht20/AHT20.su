@@ -1,0 +1,14 @@
+../aht20/AHT20.cpp:20:1:AHT20::AHT20(I2C_HandleTypeDef*)	16	static
+../aht20/AHT20.cpp:29:1:AHT20::~AHT20()	16	static
+../aht20/AHT20.cpp:29:1:virtual AHT20::~AHT20()	16	static
+../aht20/AHT20.cpp:39:6:void AHT20::softReset()	32	static
+../aht20/AHT20.cpp:50:6:bool AHT20::_Init()	32	static
+../aht20/AHT20.cpp:66:6:bool AHT20::_startmeasurement()	32	static
+../aht20/AHT20.cpp:77:6:void AHT20::StartMeasurement()	16	static
+../aht20/AHT20.cpp:90:6:bool AHT20::ReadTempHumidity(float*, float*)	56	static
+../aht20/AHT20.cpp:142:6:bool AHT20::readStatusReg()	32	static
+../aht20/AHT20.cpp:161:16:uint8_t crc8(const uint8_t*, int)	32	static
+../aht20/AHT20.cpp:186:6:void AHT20::main()	16	static
+../aht20/AHT20.cpp:261:6:bool AHT20::checkDevice()	24	static
+../aht20/AHT20.cpp:266:6:void AHT20::getTempHumidity(float*, float*)	24	static
+../aht20/AHT20.cpp:271:6:bool AHT20::newData()	24	static
