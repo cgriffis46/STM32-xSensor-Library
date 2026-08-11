@@ -7,29 +7,33 @@
 
 #include "bmp390.h"
 
+#include "cmsis_os.h"
+
 namespace bmp390 {
 
-static int8_t i2c_write(uint8_t reg_addr, const uint8_t *reg_data, uint32_t len,
+bmp3_dev _dev;
+bmp390 *_selfpointer;
+
+static int8_t i2c_write(uint8_t reg_addr, uint8_t *reg_data, uint32_t len,
                         void *intf_ptr);
+
 static int8_t i2c_read(uint8_t reg_addr, uint8_t *reg_data, uint32_t len,
                        void *intf_ptr);
-static int8_t spi_read(uint8_t reg_addr, uint8_t *reg_data, uint32_t len,
-                       void *intf_ptr);
-static int8_t spi_write(uint8_t reg_addr, const uint8_t *reg_data, uint32_t len,
-                        void *intf_ptr);
+
 static void delay_ms(uint32_t us, void *intf_ptr);
 static int8_t validate_trimming_param(struct bmp3_dev *dev);
 static int8_t cal_crc(uint8_t seed, uint8_t data);
 
-
 bmp390::bmp390(bmp390_param_t param) {
 	// TODO Auto-generated constructor stub
 	memcpy(&this->_param,&param,sizeof(bmp390_param_t));
+	 _param._DevAddress = param._DevAddress<<1;
 	_state=bmp390_init_state;
-	temp = NAN; pressure = NAN;
+	_temp = NAN; _pressure = NAN;
 	_newData=false;
-	_dev.intf_ptr=_param.hi2c;
-	//_dev.chip_id = addr;
+	_dev.intf_ptr=_param._hi2c;
+	_dev.chip_id = _param._DevAddress;
+	_dev.delay_ms = &delay_ms;
 	_dev.intf = BMP3_I2C_INTF;
 	_dev.read = &i2c_read;
 	_dev.write = &i2c_write;
@@ -40,129 +44,48 @@ bmp390::~bmp390() {
 	// TODO Auto-generated destructor stub
 }
 
+
 bool bmp390::newData(){
 	return _newData;
 }
 
-static float BMP390_compensate_temperature(uint32_t uncomp_temp, BMP390_calib_data *calib_data)
-{
-	float partial_data1;
-	float partial_data2;
-	partial_data1 = (float)(uncomp_temp-calib_data->par_t1);
-	partial_data2 = (float)(partial_data1 * calib_data->par_t2);
-	/* Update the compensated temperature in calib structure since this is
-	 * needed for pressure calculation */
-	calib_data->t_lin = partial_data2 + (partial_data1 * partial_data1) * calib_data->par_t3;
-	/* Returns compensated temperature */
-	return calib_data->t_lin;
-}
-
-static float BMP390_compensate_pressure(uint32_t uncomp_press, BMP390_calib_data *calib_data)
-{
-	/* Variable to store the compensated pressure */
-	float comp_press;
-	/* Temporary variables used for compensation */
-	float partial_data1;
-	float partial_data2;
-	float partial_data3;
-	float partial_data4;
-	float partial_out1;
-	float partial_out2;
-	/* Calibration data */
-	partial_data1 = calib_data->par_p6 * calib_data->t_lin;
-	partial_data2 = calib_data->par_p7 * (calib_data->t_lin * calib_data->t_lin);
-	partial_data3 = calib_data->par_p8 * (calib_data->t_lin * calib_data->t_lin * calib_data->t_lin);
-	partial_out1 = calib_data->par_p5 + partial_data1 + partial_data2 + partial_data3;
-	partial_data1 = calib_data->par_p2 * calib_data->t_lin;
-	partial_data2 = calib_data->par_p3 * (calib_data->t_lin * calib_data->t_lin);
-	partial_data3 = calib_data->par_p4 * (calib_data->t_lin * calib_data->t_lin * calib_data->t_lin);
-	partial_out2 = (float)uncomp_press * (calib_data->par_p1 + partial_data1 + partial_data2 + partial_data3);
-	partial_data1 = (float)uncomp_press * (float)uncomp_press;
-	partial_data2 = calib_data->par_p9 + calib_data->par_p10 * calib_data->t_lin;
-	partial_data3 = partial_data1 * partial_data2;
-	partial_data4 = partial_data3 + ((float)uncomp_press * (float)uncomp_press * (float)uncomp_press) * calib_data->par_p11;
-	comp_press = partial_out1 + partial_out2 + partial_data4;
-	return comp_press;
-}
-
-bool bmp390::ReadCalData(){
-	uint8_t buf[21];
-	ReadRegMulti(bmp390_reg_NVM_PAR_T1_addr,buf,21);
-
-	NVM_PAR_T1=(buf[1]<<8);
-	NVM_PAR_T1|=buf[0];
-	NVM_PAR_T2=buf[3]<<8;
-	NVM_PAR_T2|=buf[2];
-	NVM_PAR_T3=buf[4];
-	NVM_PAR_P1=buf[6]<<8;
-	NVM_PAR_P1|=buf[5];
-	NVM_PAR_P2=buf[8]<<8;
-	NVM_PAR_P2|=buf[7];
-	NVM_PAR_P3=buf[9];
-	NVM_PAR_P4=buf[10];
-	NVM_PAR_P5=buf[12]<<8;
-	NVM_PAR_P5|=buf[11];
-	NVM_PAR_P6=buf[14]<<8;
-	NVM_PAR_P6|=buf[13];
-	NVM_PAR_P7=buf[15];
-	NVM_PAR_P8=buf[16];
-	NVM_PAR_P9=buf[18]<<8;
-	NVM_PAR_P9|=buf[17];
-	NVM_PAR_P10=buf[19];
-	NVM_PAR_P11=buf[20];
-
-	_calib_data.par_t1=NVM_PAR_T1/(2^-8);
-	_calib_data.par_t2=NVM_PAR_T2/(1<<30);
-	_calib_data.par_t3=NVM_PAR_T3/((uint64_t)1<<48);
-	_calib_data.par_p1=(NVM_PAR_P1-(1<<14))/(1<<20);
-	_calib_data.par_p2=(NVM_PAR_P2-(1<<14))/(1<<29);
-	_calib_data.par_p3=(NVM_PAR_P3)/(1<<32);
-	_calib_data.par_p4=(NVM_PAR_P4)/(1<<37);
-	_calib_data.par_p5=(NVM_PAR_P5)/(2^-3);
-	_calib_data.par_p6=(NVM_PAR_P6)/(1<<6);
-	_calib_data.par_p7=(NVM_PAR_P7)/(1<<8);
-	_calib_data.par_p8=(NVM_PAR_P8)/(1<<15);
-	_calib_data.par_p9=(NVM_PAR_P9)/(1<<48);
-	_calib_data.par_p10=(NVM_PAR_P10)/(1<<48);
-	_calib_data.par_p11=(NVM_PAR_P11)/((2.0^65));
-
-	return true;
-}
-
 bool bmp390::Reset(){
-
+	if(BMP3_OK==bmp3_soft_reset(&_dev)) return true;
+	return false;
 }
 
 bool bmp390::ReadStatusReg(){
-	return ReadReg8(&status_reg.reg,bmp390_reg_status_addr);
+//	return ReadReg8(&status_reg.reg,bmp390_reg_status_addr);
+	return false;
 }
 
 bool bmp390::ReadEventReg(){
-
+	return false;
 }
 
 bool bmp390::WriteFifoConfig1Reg(){
-
+	return false;
 }
 
 bool bmp390::WriteIntCtrlReg(){
-
+	return false;
 }
 
 bool bmp390::WriteIfConfReg(){
-
+	return false;
 }
 
 bool bmp390::WritePwrCtrlReg(){
-
+	return false;
 }
 
 bool bmp390::WriteOsrReg(){
 //	osr_reg.reg=_param.
+	return false;
 }
 
 bool bmp390::WriteOdrReg(){
-
+	return false;
 }
 
 bool bmp390::checkDevice(){
@@ -177,24 +100,130 @@ bool ReadTempPressure(){
 }
 
 void bmp390::main(){
-	int8_t bmp_res;
-
+//	int8_t bmp_res;
 	switch(_state){
 		case bmp390_init_state:
-			if(checkDevice()){
-				bmp_res=bmp3_soft_reset(&_dev);
-				_state=bmp390_reset_state;
+			if(_param._hi2c->State == HAL_I2C_STATE_READY){
+				if(checkDevice()){
+					if(Reset()){
+						last_update=HAL_GetTick();
+						_state=bmp390_reset_state;
+					}
+					else{
+						last_update=HAL_GetTick();
+						_state=bmp390_err_state;
+					}
+				}
 			}
 			break;
 		case bmp390_reset_state:
+			if(HAL_GetTick()>(last_update+10)){
+				_state=bmp390_setup_state;
+			}
+			break;
+		case bmp390_setup_state:
+			if(bmp3_init(&_dev)!=BMP3_OK){
+				last_update=HAL_GetTick();
+				_state=bmp390_err_state;
+				break;
+			}
+			if(validate_trimming_param(&_dev)!=BMP3_OK){
+				last_update=HAL_GetTick();
+				_state=bmp390_err_state;
+				break;
+			}
+			_dev.settings.odr_filter.temp_os = _param.temp_os;
+			_dev.settings.odr_filter.press_os = _param.press_os;
+			_dev.settings.odr_filter.odr = _param.odr;
+			_dev.settings.odr_filter.iir_filter = _param.iir_filter;
+			_dev.settings.op_mode=_param.mode;
+			_dev.settings.press_en=BMP3_ENABLE;
+			_dev.settings.temp_en=BMP3_ENABLE;
+
+
+			bmp3_set_op_mode(&_dev);
+			last_update=HAL_GetTick();
+			switch (_param.mode){
+				case pwr_normal:
+					//_state=
+					break;
+				case pwr_forced:
+					_state=bmp390_sleep_state;
+					break;
+				case pwr_sleep:
+					_state=bmp390_sleep_state;
+					break;
+				default:
+					break;
+			}
 			break;
 		case bmp390_err_state:
 			break;
-
 		default:
 			_state=bmp390_init_state;
 			break;
 	}
+}
+
+static int8_t i2c_write(uint8_t reg_addr, uint8_t *reg_data, uint32_t len, void *intf_ptr){
+		HAL_I2C_Mem_Write((I2C_HandleTypeDef*)_dev.intf_ptr,_dev.chip_id,reg_addr, 1, reg_data, len, 100);
+		return 0;
+}
+
+static int8_t i2c_read(uint8_t reg_addr, uint8_t *reg_data, uint32_t len, void *intf_ptr){
+	HAL_I2C_Mem_Read((I2C_HandleTypeDef*)_dev.intf_ptr,_dev.chip_id,reg_addr, 1, reg_data, len, 100);
+	return 0;
+}
+
+static void delay_ms(uint32_t us, void *intf_ptr){
+	osDelay(us);
+}
+
+static int8_t validate_trimming_param(struct bmp3_dev *dev) {
+  int8_t rslt;
+  uint8_t crc = 0xFF;
+  uint8_t stored_crc;
+  uint8_t trim_param[21];
+  uint8_t i;
+
+  rslt = bmp3_get_regs(BMP3_REG_CALIB_DATA, trim_param, 21, dev);
+  if (rslt == BMP3_OK) {
+    for (i = 0; i < 21; i++) {
+      crc = (uint8_t)cal_crc(crc, trim_param[i]);
+    }
+
+    crc = (crc ^ 0xFF);
+    rslt = bmp3_get_regs(0x30, &stored_crc, 1, dev);
+    if (stored_crc != crc) {
+      rslt = -1;
+    }
+  }
+  return rslt;
+}
+
+/*
+ * @brief function to calculate CRC for the trimming parameters
+ * */
+static int8_t cal_crc(uint8_t seed, uint8_t data) {
+  int8_t poly = 0x1D;
+  int8_t var2;
+  uint8_t i;
+  for (i = 0; i < 8; i++) {
+    if ((seed & 0x80) ^ (data & 0x80)) {
+      var2 = 1;
+    } else {
+      var2 = 0;
+    }
+
+    seed = (seed & 0x7F) << 1;
+    data = (data & 0x7F) << 1;
+    seed = seed ^ (uint8_t)(poly * var2);
+  }
+  return (int8_t)seed;
+}
+
+bool startMeasurement(){
+	return false;
 }
 
 } /* namespace bmp390 */

@@ -30,10 +30,10 @@
 ../mpl3115a2/mpl3115a2.cpp:289:6:bool mpl3115a2::mpl3115a2::_getConversion()	48	static
 ../mpl3115a2/mpl3115a2.cpp:305:6:bool mpl3115a2::mpl3115a2::readDrStatus()	16	static
 ../mpl3115a2/mpl3115a2.cpp:309:7:float mpl3115a2::mpl3115a2::getTemp()	16	static
-../mpl3115a2/mpl3115a2.cpp:320:7:float mpl3115a2::mpl3115a2::getPressure()	16	static
-../mpl3115a2/mpl3115a2.cpp:333:7:float mpl3115a2::mpl3115a2::getAltitude()	24	static
-../mpl3115a2/mpl3115a2.cpp:341:6:void mpl3115a2::mpl3115a2::SetIRQ(mpl3115a2::irq_en_param_t, mpl3115a2::irq_cfg_param_t)	24	static
-../mpl3115a2/mpl3115a2.cpp:347:6:bool mpl3115a2::mpl3115a2::readPtDataCfg()	16	static
-../mpl3115a2/mpl3115a2.cpp:351:6:bool mpl3115a2::mpl3115a2::writePtDataCfg()	16	static
-../mpl3115a2/mpl3115a2.cpp:355:6:bool mpl3115a2::mpl3115a2::setupPtDataCfg()	16	static
-../mpl3115a2/mpl3115a2.cpp:365:6:bool mpl3115a2::mpl3115a2::setActive()	16	static
+../mpl3115a2/mpl3115a2.cpp:314:7:float mpl3115a2::mpl3115a2::getPressure()	16	static
+../mpl3115a2/mpl3115a2.cpp:319:7:float mpl3115a2::mpl3115a2::getAltitude()	24	static
+../mpl3115a2/mpl3115a2.cpp:327:6:void mpl3115a2::mpl3115a2::SetIRQ(mpl3115a2::irq_en_param_t, mpl3115a2::irq_cfg_param_t)	24	static
+../mpl3115a2/mpl3115a2.cpp:333:6:bool mpl3115a2::mpl3115a2::readPtDataCfg()	16	static
+../mpl3115a2/mpl3115a2.cpp:337:6:bool mpl3115a2::mpl3115a2::writePtDataCfg()	16	static
+../mpl3115a2/mpl3115a2.cpp:341:6:bool mpl3115a2::mpl3115a2::setupPtDataCfg()	16	static
+../mpl3115a2/mpl3115a2.cpp:351:6:bool mpl3115a2::mpl3115a2::setActive()	16	static

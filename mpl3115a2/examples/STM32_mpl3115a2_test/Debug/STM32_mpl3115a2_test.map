@@ -4054,7 +4054,7 @@ Discarded input sections
  .debug_macro   0x00000000       0x16 ./mpl3115a2/mpl3115a2.o
  .debug_macro   0x00000000       0x20 ./mpl3115a2/mpl3115a2.o
  .debug_macro   0x00000000       0x8e ./mpl3115a2/mpl3115a2.o
- .debug_line    0x00000000     0x14c1 ./mpl3115a2/mpl3115a2.o
+ .debug_line    0x00000000     0x14bf ./mpl3115a2/mpl3115a2.o
  .debug_str     0x00000000    0xc06d0 ./mpl3115a2/mpl3115a2.o
  .comment       0x00000000       0x44 ./mpl3115a2/mpl3115a2.o
  .debug_frame   0x00000000      0x5a8 ./mpl3115a2/mpl3115a2.o

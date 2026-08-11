@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>sensor_drv :: non-blocking state machine</title>
+<style>
+  :root{
+    --bg:#0a0f0d;
+    --panel:#0f1613;
+    --panel-edge:#1c2b24;
+    --grid:#152119;
+    --green:#5ef2a0;
+    --green-dim:#2c5c44;
+    --amber:#ffb238;
+    --copper:#ff8a3d;
+    --red:#ff5b5b;
+    --text:#e7f2ec;
+    --text-dim:#5c7268;
+    --mono:'JetBrains Mono','SF Mono',Consolas,monospace;
+    --disp:'Space Grotesk',var(--mono);
+  }
+  @font-face{font-family:'JetBrains Mono';src:local('JetBrains Mono');}
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--text);font-family:var(--mono);}
+  body{
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size:24px 24px;
+    padding:18px;
+  }
+  .wrap{max-width:1180px;margin:0 auto;}
+  .topbar{
+    display:flex; align-items:baseline; justify-content:space-between;
+    border-bottom:1px solid var(--panel-edge); padding-bottom:10px; margin-bottom:14px;
+    flex-wrap:wrap; gap:8px;
+  }
+  .topbar h1{
+    font-family:var(--disp); font-size:16px; font-weight:600; letter-spacing:.02em; margin:0;
+    color:var(--text);
+  }
+  .topbar h1 span{color:var(--green);}
+  .tick-counter{color:var(--text-dim); font-size:12px;}
+  .tick-counter b{color:var(--amber); font-weight:600;}
+
+  .grid2{display:grid; grid-template-columns: 1.1fr 1fr; gap:14px; margin-bottom:14px;}
+  @media (max-width:860px){.grid2{grid-template-columns:1fr;}}
+
+  .panel{
+    background:var(--panel); border:1px solid var(--panel-edge); border-radius:4px;
+    padding:14px; position:relative;
+  }
+  .panel-label{
+    font-family:var(--disp); font-size:11px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--text-dim); margin:0 0 10px 0; display:flex; justify-content:space-between; align-items:center;
+  }
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--green);margin-right:6px;
+    box-shadow:0 0 6px var(--green);}
+
+  svg{display:block; width:100%; height:290px;}
+  .node-box{fill:var(--panel); stroke:var(--panel-edge); stroke-width:1.5; rx:6;}
+  .node-box.active{stroke:var(--green); fill:#0f1f16; filter:drop-shadow(0 0 8px rgba(94,242,160,.55));}
+  .node-box.err-active{stroke:var(--red); fill:#2a1010; filter:drop-shadow(0 0 8px rgba(255,91,91,.55));}
+  .node-label{font-family:var(--mono); font-size:11.5px; fill:var(--text); text-anchor:middle;}
+  .node-label.active{fill:var(--green);}
+  .node-label.err-active{fill:var(--red);}
+  .edge{stroke:var(--panel-edge); stroke-width:1.4; fill:none;}
+  .edge.err{stroke:#5c2626; stroke-dasharray:3 3;}
+
+  pre#code{
+    margin:0; font-size:11.6px; line-height:1.55; max-height:290px; overflow:auto;
+    white-space:pre; color:var(--text);
+  }
+  pre#code::-webkit-scrollbar{width:8px;} pre#code::-webkit-scrollbar-thumb{background:var(--panel-edge);border-radius:4px;}
+  .kw{color:var(--copper);} .tp{color:var(--amber);} .cm{color:var(--text-dim); font-style:italic;}
+  .fn{color:var(--green);} .st{color:#9fd8ff;} .cur-line{background:rgba(94,242,160,.09); display:inline-block; width:100%;}
+
+  .timeline-wrap{overflow:hidden; border-radius:3px; border:1px solid var(--panel-edge);}
+  canvas{display:block; width:100%; height:110px; background:#0a0f0d;}
+  .legend{display:flex; gap:16px; margin-top:8px; font-size:10.5px; color:var(--text-dim); flex-wrap:wrap;}
+  .legend span{display:inline-flex; align-items:center; gap:5px;}
+  .sw{width:9px;height:9px;border-radius:2px; display:inline-block;}
+
+  .console-wrap{display:grid; grid-template-columns:1fr 220px; gap:14px;}
+  @media (max-width:860px){.console-wrap{grid-template-columns:1fr;}}
+  #log{height:150px; overflow-y:auto; font-size:11.5px; line-height:1.65; color:var(--text-dim);}
+  #log .l-new{color:var(--green);}
+  #log .l-err{color:var(--red);}
+  #log .l-read{color:var(--amber);}
+  #log::-webkit-scrollbar{width:8px;} #log::-webkit-scrollbar-thumb{background:var(--panel-edge);border-radius:4px;}
+
+  .controls{display:flex; flex-direction:column; gap:8px;}
+  button{
+    font-family:var(--mono); font-size:11.5px; background:var(--panel); color:var(--text);
+    border:1px solid var(--panel-edge); border-radius:4px; padding:9px 10px; cursor:pointer;
+    text-align:left; letter-spacing:.02em; transition:border-color .15s, color .15s;
+  }
+  button:hover{border-color:var(--green); color:var(--green);}
+  button:active{transform:translateY(1px);}
+  button.danger:hover{border-color:var(--red); color:var(--red);}
+  button:focus-visible{outline:2px solid var(--green); outline-offset:1px;}
+  .speedrow{display:flex; align-items:center; gap:8px; font-size:11px; color:var(--text-dim); margin-top:4px;}
+  input[type=range]{flex:1; accent-color:var(--green);}
+
+  .reading{display:flex; gap:18px; margin-top:2px;}
+  .reading .v{font-family:var(--disp); font-size:22px; color:var(--green); font-weight:600;}
+  .reading .u{font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:.08em;}
+  @media (prefers-reduced-motion: reduce){ * { transition:none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <h1>sensor_drv.c <span>::</span> non-blocking state machine</h1>
+    <div class="tick-counter">loop ticks: <b id="tickCount">0</b> &nbsp;|&nbsp; uptime: <b id="uptime">0ms</b></div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <p class="panel-label"><span><span class="dot"></span>STATE DIAGRAM</span><span id="stateName">IDLE</span></p>
+      <svg viewBox="0 0 520 290" id="diagram"></svg>
+    </div>
+    <div class="panel">
+      <p class="panel-label"><span>SOURCE — driver.c</span><span id="lineHint">tick()</span></p>
+      <pre id="code"></pre>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:14px;">
+    <p class="panel-label"><span><span class="dot"></span>LOGIC ANALYZER — main loop() never stalls</span></p>
+    <div class="timeline-wrap"><canvas id="timeline" width="1100" height="110"></canvas></div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--green)"></i>loop tick (fires every pass — proof it's not blocking)</span>
+      <span><i class="sw" style="background:var(--amber)"></i>WAIT_CONV (I2C conversion in progress)</span>
+      <span><i class="sw" style="background:#3a6ff2"></i>READ / PROCESS</span>
+      <span><i class="sw" style="background:var(--red)"></i>ERROR / retry</span>
+    </div>
+  </div>
+
+  <div class="panel console-wrap">
+    <div>
+      <p class="panel-label"><span>CONSOLE</span></p>
+      <div id="log"></div>
+      <div class="reading">
+        <div><div class="v" id="tempVal">--</div><div class="u">°C temp</div></div>
+        <div><div class="v" id="humVal">--</div><div class="u">%RH humidity</div></div>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="btnStart">▶ start / pause loop()</button>
+      <button id="btnGlitch" class="danger">⚡ inject I2C NACK</button>
+      <button id="btnReset">↺ reset</button>
+      <div class="speedrow">
+        <span>speed</span>
+        <input type="range" id="speed" min="1" max="5" value="2">
+        <span id="speedLabel">normal</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ---------- state machine model ----------
+const STATES = ["IDLE","TRIGGER","WAIT_CONV","READ_I2C","PROCESS","ERROR"];
+const NODE_POS = {
+  IDLE:      {x:70,  y:60},
+  TRIGGER:   {x:260, y:60},
+  WAIT_CONV: {x:450, y:60},
+  READ_I2C:  {x:450, y:220},
+  PROCESS:   {x:260, y:220},
+  ERROR:     {x:70,  y:220},
+};
+const EDGES = [
+  ["IDLE","TRIGGER"], ["TRIGGER","WAIT_CONV"], ["WAIT_CONV","READ_I2C"],
+  ["READ_I2C","PROCESS"], ["PROCESS","IDLE"],
+  ["TRIGGER","ERROR",true], ["READ_I2C","ERROR",true], ["ERROR","IDLE",true]
+];
+const LINE_HINT = {
+  IDLE:"SENSOR_IDLE — waiting for poll interval",
+  TRIGGER:"SENSOR_TRIGGER — write CMD_MEASURE",
+  WAIT_CONV:"SENSOR_WAIT_CONV — polling millis(), no delay()",
+  READ_I2C:"SENSOR_READ_I2C — burst-read 6 data regs",
+  PROCESS:"SENSOR_PROCESS — decode raw counts",
+  ERROR:"SENSOR_ERROR — backoff, will retry",
+};
+
+const CODE = `<span class="cm">// driver.c — generic I2C temp/humidity sensor</span>
+<span class="cm">// non-blocking: tick() is called every loop() pass</span>
+<span class="cm">// and returns immediately. no delay() anywhere.</span>
+
+<span class="kw">typedef enum</span> {
+  SENSOR_IDLE, SENSOR_TRIGGER, SENSOR_WAIT_CONV,
+  SENSOR_READ_I2C, SENSOR_PROCESS, SENSOR_ERROR
+} <span class="tp">sensor_state_t</span>;
+
+<span class="kw">static</span> <span class="tp">sensor_state_t</span> state = SENSOR_IDLE;
+<span class="kw">static</span> <span class="tp">uint32_t</span> t_mark = <span class="st">0</span>;
+<span class="kw">static</span> <span class="tp">uint8_t</span>  raw[<span class="st">6</span>];
+<span class="kw">static</span> <span class="tp">float</span>    last_temp, last_hum;
+<span class="kw">static</span> <span class="tp">uint8_t</span>  retry_count = <span class="st">0</span>;
+
+<span class="cm">// call this every loop() iteration — never blocks</span>
+<span class="kw">void</span> <span class="fn">sensor_tick</span>(<span class="kw">void</span>) {
+  <span class="tp">uint32_t</span> now = millis();
+
+  <span class="kw">switch</span> (state) {
+
+  <span class="kw">case</span> SENSOR_IDLE:
+    <span class="kw">if</span> (now - t_mark >= POLL_INTERVAL_MS) {
+      i2c_write_reg(SENSOR_ADDR, CMD_MEASURE, <span class="st">0x01</span>);
+      t_mark = now;
+      state = SENSOR_TRIGGER;
+    }
+    <span class="kw">break</span>;
+
+  <span class="kw">case</span> SENSOR_TRIGGER:
+    <span class="kw">if</span> (!i2c_bus_busy()) {
+      t_mark = now;
+      state = SENSOR_WAIT_CONV;   <span class="cm">// start non-blocking wait</span>
+    } <span class="kw">else if</span> (now - t_mark > I2C_TIMEOUT_MS) {
+      state = SENSOR_ERROR;
+    }
+    <span class="kw">break</span>;
+
+  <span class="kw">case</span> SENSOR_WAIT_CONV:
+    <span class="cm">// conversion takes ~50ms on real silicon.</span>
+    <span class="cm">// we just check the clock — loop() keeps running.</span>
+    <span class="kw">if</span> (now - t_mark >= CONV_TIME_MS) {
+      state = SENSOR_READ_I2C;
+    }
+    <span class="kw">break</span>;
+
+  <span class="kw">case</span> SENSOR_READ_I2C:
+    <span class="kw">if</span> (i2c_read_burst(SENSOR_ADDR, DATA_REG, raw, <span class="st">6</span>)) {
+      retry_count = <span class="st">0</span>;
+      state = SENSOR_PROCESS;
+    } <span class="kw">else if</span> (++retry_count > MAX_RETRY) {
+      state = SENSOR_ERROR;
+    }
+    <span class="kw">break</span>;
+
+  <span class="kw">case</span> SENSOR_PROCESS:
+    last_temp = decode_temp(raw);
+    last_hum  = decode_hum(raw);
+    t_mark = now;
+    state = SENSOR_IDLE;      <span class="cm">// cycle complete</span>
+    <span class="kw">break</span>;
+
+  <span class="kw">case</span> SENSOR_ERROR:
+    <span class="kw">if</span> (now - t_mark >= BACKOFF_MS) {
+      t_mark = now;
+      state = SENSOR_IDLE;    <span class="cm">// retry later</span>
+    }
+    <span class="kw">break</span>;
+  }
+}
+
+<span class="kw">void</span> <span class="fn">loop</span>(<span class="kw">void</span>) {
+  sensor_tick();      <span class="cm">// ~0 blocking cost</span>
+  update_display();   <span class="cm">// other work runs every pass</span>
+  handle_uart();       <span class="cm">// nothing here ever waits on the sensor</span>
+}`;
+
+document.getElementById('code').innerHTML = CODE;
+
+// ---------- draw diagram ----------
+const svg = document.getElementById('diagram');
+function buildDiagram(){
+  let html = '';
+  // edges first
+  EDGES.forEach(([a,b,err])=>{
+    const pa = NODE_POS[a], pb = NODE_POS[b];
+    const midx = (pa.x+pb.x)/2, midy=(pa.y+pb.y)/2 + (err ? 30 : 0);
+    html += `<path class="edge ${err?'err':''}" id="edge-${a}-${b}" d="M${pa.x},${pa.y} Q${midx},${midy} ${pb.x},${pb.y}" marker-end="url(#arrow${err?'-err':''})"/>`;
+  });
+  html += `<defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#1c2b24"/></marker>
+    <marker id="arrow-err" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="#5c2626"/></marker>
+  </defs>`;
+  STATES.forEach(s=>{
+    const p = NODE_POS[s];
+    html += `<g id="node-${s}">
+      <rect class="node-box" x="${p.x-60}" y="${p.y-18}" width="120" height="36" rx="6"/>
+      <text class="node-label" x="${p.x}" y="${p.y+4}">${s}</text>
+    </g>`;
+  });
+  svg.innerHTML = html;
+}
+buildDiagram();
+
+function setActiveState(s){
+  STATES.forEach(st=>{
+    const rect = document.querySelector(`#node-${st} rect`);
+    const label = document.querySelector(`#node-${st} text`);
+    rect.classList.remove('active','err-active');
+    label.classList.remove('active','err-active');
+    if(st===s){
+      rect.classList.add(s==='ERROR' ? 'err-active':'active');
+      label.classList.add(s==='ERROR' ? 'err-active':'active');
+    }
+  });
+  document.getElementById('stateName').textContent = s;
+  document.getElementById('lineHint').textContent = LINE_HINT[s];
+}
+setActiveState('IDLE');
+
+// ---------- simulated firmware clock / state machine ----------
+const POLL_INTERVAL_MS = 900;
+const CONV_TIME_MS = 550;
+const I2C_TIMEOUT_MS = 300;
+const BACKOFF_MS = 500;
+
+let state = 'IDLE';
+let t_mark = 0;
+let simTime = 0;      // fake "millis()"
+let running = false;
+let speedMult = 2;    // 1..5
+let glitchNext = false;
+let tickCount = 0;
+
+const log = document.getElementById('log');
+function logLine(text, cls){
+  const div = document.createElement('div');
+  if(cls) div.className = cls;
+  div.textContent = `[${simTime.toString().padStart(6,'0')}ms] ${text}`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  while(log.children.length > 60) log.removeChild(log.firstChild);
+}
+
+function stepStateMachine(dtMs){
+  simTime += dtMs;
+  switch(state){
+    case 'IDLE':
+      if(simTime - t_mark >= POLL_INTERVAL_MS){
+        t_mark = simTime; state='TRIGGER';
+        logLine('write CMD_MEASURE (0x01) →  addr 0x76', 'l-new');
+      }
+      break;
+    case 'TRIGGER':
+      t_mark = simTime; state='WAIT_CONV';
+      break;
+    case 'WAIT_CONV':
+      if(simTime - t_mark >= CONV_TIME_MS){
+        state = 'READ_I2C';
+      }
+      break;
+    case 'READ_I2C':
+      if(glitchNext){
+        glitchNext = false;
+        logLine('I2C NACK on burst read — retry exceeded', 'l-err');
+        state = 'ERROR'; t_mark = simTime;
+      } else {
+        logLine('burst-read 6 bytes OK', 'l-read');
+        state = 'PROCESS';
+      }
+      break;
+    case 'PROCESS': {
+      const temp = (21 + Math.sin(simTime/4000)*3 + Math.random()*0.4).toFixed(1);
+      const hum  = (45 + Math.cos(simTime/5000)*8 + Math.random()*0.6).toFixed(1);
+      document.getElementById('tempVal').textContent = temp;
+      document.getElementById('humVal').textContent = hum;
+      logLine(`decoded → temp=${temp}°C  hum=${hum}%RH`, 'l-new');
+      t_mark = simTime; state = 'IDLE';
+      break;
+    }
+    case 'ERROR':
+      if(simTime - t_mark >= BACKOFF_MS){
+        t_mark = simTime; state = 'IDLE';
+        logLine('backoff elapsed, retrying', null);
+      }
+      break;
+  }
+  setActiveState(state);
+}
+
+// ---------- timeline (logic analyzer) ----------
+const canvas = document.getElementById('timeline');
+const ctx = canvas.getContext('2d');
+function resizeCanvas(){
+  const ratio = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = 110;
+  canvas.width = w*ratio; canvas.height = h*ratio;
+  ctx.setTransform(ratio,0,0,ratio,0,0);
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+const bandHistory = []; // {x, state}
+const TICK_SPACING = 4;
+let px = 0;
+
+const STATE_COLOR = {
+  IDLE:'#152119', TRIGGER:'#3a6ff2', WAIT_CONV:'#ffb238',
+  READ_I2C:'#3a6ff2', PROCESS:'#3a6ff2', ERROR:'#ff5b5b'
+};
+
+function drawTimelineTick(){
+  const w = canvas.clientWidth, h = 110;
+  // scroll everything left
+  const img = ctx.getImageData(0,0,canvas.width,canvas.height);
+  ctx.putImageData(img, -TICK_SPACING*(window.devicePixelRatio||1), 0);
+  ctx.clearRect(w-TICK_SPACING, 0, TICK_SPACING, h);
+  // background band for current sensor state
+  ctx.fillStyle = STATE_COLOR[state] || '#152119';
+  ctx.globalAlpha = state==='IDLE' ? 0 : 0.55;
+  ctx.fillRect(w-TICK_SPACING, 20, TICK_SPACING, 60);
+  ctx.globalAlpha = 1;
+  // main loop tick pulse — ALWAYS fires
+  ctx.fillStyle = '#5ef2a0';
+  ctx.fillRect(w-TICK_SPACING, 92, 2, 10);
+}
+
+// ---------- main animation loop ----------
+let lastFrame = performance.now();
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt = now - lastFrame;
+  if(dt < (60 / (speedMult*20))*16) { /* throttle-ish, but keep simple */ }
+  lastFrame = now;
+  if(!running) return;
+
+  tickCount++;
+  document.getElementById('tickCount').textContent = tickCount;
+  document.getElementById('uptime').textContent = simTime + 'ms';
+
+  const dtMs = 16 * speedMult; // simulated ms per real frame-ish
+  stepStateMachine(dtMs);
+  drawTimelineTick();
+}
+requestAnimationFrame(frame);
+
+// ---------- controls ----------
+const btnStart = document.getElementById('btnStart');
+btnStart.addEventListener('click', ()=>{
+  running = !running;
+  btnStart.textContent = running ? '⏸ pause loop()' : '▶ start / pause loop()';
+  if(running) logLine('loop() started — sensor_tick() running every pass', null);
+});
+
+document.getElementById('btnGlitch').addEventListener('click', ()=>{
+  glitchNext = true;
+  logLine('fault injected: next I2C read will NACK', 'l-err');
+});
+
+document.getElementById('btnReset').addEventListener('click', ()=>{
+  state='IDLE'; simTime=0; t_mark=0; tickCount=0; glitchNext=false;
+  document.getElementById('tempVal').textContent='--';
+  document.getElementById('humVal').textContent='--';
+  log.innerHTML='';
+  setActiveState('IDLE');
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  logLine('reset', null);
+});
+
+const speedSlider = document.getElementById('speed');
+const speedLabels = {1:'slow',2:'normal',3:'brisk',4:'fast',5:'max'};
+speedSlider.addEventListener('input', (e)=>{
+  speedMult = parseInt(e.target.value);
+  document.getElementById('speedLabel').textContent = speedLabels[speedMult];
+});
+
+logLine('idle — press start to run loop()', null);
+</script>
+</body>
+</html>

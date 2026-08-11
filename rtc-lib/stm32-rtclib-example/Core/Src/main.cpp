@@ -118,7 +118,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
-  //rtc.begin();
+  rtc.begin(DS1307_ADDR);
+  _now=rtc.now();
+
   //
   /* USER CODE END 2 */
 
@@ -399,9 +401,8 @@ uint8_t charBuffer[255];
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-	rtc.begin(DS1307_ADDR);
-	rtc.adjust(DateTime(2026, 7, 30, 14,
-	           43, 0));
+
+	//rtc.adjust(DateTime(2026, 7, 30, 16,34, 0));
   /* Infinite loop */
   for(;;)
   {

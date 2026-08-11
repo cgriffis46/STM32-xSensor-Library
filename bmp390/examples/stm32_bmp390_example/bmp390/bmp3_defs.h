@@ -515,7 +515,7 @@ typedef BMP3_INTF_RET_TYPE (*bmp3_read_fptr_t)(uint8_t reg_addr, uint8_t *read_d
  * @retval Non-zero for Failure
  *
  */
-typedef BMP3_INTF_RET_TYPE (*bmp3_write_fptr_t)(uint8_t reg_addr, const uint8_t *read_data, uint32_t len,
+typedef BMP3_INTF_RET_TYPE (*bmp3_write_fptr_t)(uint8_t reg_addr, uint8_t *read_data, uint32_t len,
                                                 void *intf_ptr);
 
 /*!
@@ -527,7 +527,7 @@ typedef BMP3_INTF_RET_TYPE (*bmp3_write_fptr_t)(uint8_t reg_addr, const uint8_t 
  *                                  for interface related call backs
  *
  */
-typedef void (*bmp3_delay_us_fptr_t)(uint32_t period, void *intf_ptr);
+typedef void (*bmp3_delay_ms_fptr_t)(uint32_t period, void *intf_ptr);
 
 /********************************************************/
 

@@ -11,16 +11,15 @@
 #include <stm32l4xx_hal.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <stm32l4xx_hal.h>
-#include <stdlib.h>
+#include <stdio.h>
 #include <math.h>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <queue>
-#include <cstring>
-#include <stdio.h>
 #include "bmp3.h"
 #include "bmp3_defs.h"
+#include "stm32l4xx_hal_def.h"
 
 namespace bmp390 {
 
@@ -35,7 +34,6 @@ enum bmp390_state_t{
 
 enum bmp390_reg_addr_t{
 	bmp390_reg_cmd_addr=0x7E,
-
 	bmp390_reg_NVM_PAR_T1_addr=0x31,
 	bmp390_reg_NVM_PAR_T2_addr=0x33,
 	bmp390_reg_NVM_PAR_T3_addr=0x35,
@@ -81,24 +79,53 @@ enum bmp390_reg_addr_t{
 };
 
 enum bmp390_odr_sel_t{
-	odr_200 = 0x00,
-	odr_100 = 0x01,
-	odr_50 = 0x02,
-	odr_25 = 0x03,
-	odr_12p5 = 0x04,
-	odr_6p25 = 0x05,
-	odr_3p1 = 0x06,
-	odr_1p5 = 0x07,
-	odr_0p78 = 0x08,
-	odr_0p39 = 0x09,
-	odr_0p2 = 0x0A,
-	odr_0p1 = 0x0B,
-	odr_0p05 = 0x0C,
-	odr_0p02 = 0x0D,
-	odr_0p01 = 0x0E,
-	odr_0p006 = 0x0F,
-	odr_0p003 = 0x10,
-	odr_0p0015 = 0x11
+	odr_200 = BMP3_ODR_200_HZ,
+	odr_100 = BMP3_ODR_100_HZ,
+	odr_50 = BMP3_ODR_50_HZ,
+	odr_25 = BMP3_ODR_25_HZ,
+	odr_12p5 = BMP3_ODR_12_5_HZ,
+	odr_6p25 = BMP3_ODR_6_25_HZ,
+	odr_3p1 = BMP3_ODR_3_1_HZ,
+	odr_1p5 = BMP3_ODR_1_5_HZ,
+	odr_0p78 = BMP3_ODR_0_78_HZ,
+	odr_0p39 = BMP3_ODR_0_39_HZ,
+	odr_0p2 = BMP3_ODR_0_2_HZ,
+	odr_0p1 = BMP3_ODR_0_1_HZ,
+	odr_0p05 = BMP3_ODR_0_05_HZ,
+	odr_0p02 = BMP3_ODR_0_02_HZ,
+	odr_0p01 = BMP3_ODR_0_01_HZ,
+	odr_0p006 = BMP3_ODR_0_006_HZ,
+	odr_0p003 = BMP3_ODR_0_003_HZ,
+	odr_0p0015 = BMP3_ODR_0_001_HZ
+};
+
+enum bmp390_iir_t{
+	/**\name Filter setting macros */
+	iir_disable = BMP3_IIR_FILTER_DISABLE,
+	iir_1 = BMP3_IIR_FILTER_COEFF_1,
+	iir_3 = BMP3_IIR_FILTER_COEFF_3,
+	iir_7 = BMP3_IIR_FILTER_COEFF_7,
+	iir_15 = BMP3_IIR_FILTER_COEFF_15,
+	iir_31 = BMP3_IIR_FILTER_COEFF_31,
+	iir_63 = BMP3_IIR_FILTER_COEFF_63,
+	iir_127 = BMP3_IIR_FILTER_COEFF_127
+};
+
+enum bmp390_oversampling_t{
+/**\name Over sampling macros */
+	os_0x = BMP3_NO_OVERSAMPLING,
+	os_2x = BMP3_OVERSAMPLING_2X,
+	os_4x = BMP3_OVERSAMPLING_4X,
+	os_8x = BMP3_OVERSAMPLING_8X,
+	os_16x = BMP3_OVERSAMPLING_16X,
+	os_32x = BMP3_OVERSAMPLING_32X,
+};
+
+enum bmp390_pwr_mode_t{
+	/**\name Power mode macros */
+	pwr_sleep = BMP3_MODE_SLEEP,
+	pwr_forced = BMP3_MODE_FORCED,
+	pwr_normal = BMP3_MODE_NORMAL
 };
 
 enum bmp390_cmd_t{
@@ -107,28 +134,15 @@ enum bmp390_cmd_t{
 	bmp390_soft_reset = 0xB6
 };
 
-struct BMP390_calib_data{
-	float par_t1;
-	float par_t2;
-	float par_t3;
-	float t_lin;
-	float par_p1;
-	float par_p2;
-	float par_p3;
-	float par_p4;
-	float par_p5;
-	float par_p6;
-	float par_p7;
-	float par_p8;
-	float par_p9;
-	float par_p10;
-	float par_p11;
-};
-
 typedef struct {
 	I2C_HandleTypeDef *_hi2c;
 	uint16_t _DevAddress;
-	bmp390_odr_sel_t odr;
+	bmp390_oversampling_t press_os; /*! Pressure oversampling */
+	bmp390_oversampling_t temp_os; /*! Temperature oversampling */
+    bmp390_iir_t iir_filter;     /*! IIR filter */
+    bmp390_odr_sel_t odr; /*! Output data rate */
+    bmp390_pwr_mode_t mode;
+
 
 }bmp390_param_t;
 
@@ -140,11 +154,12 @@ public:
 	virtual ~bmp390();
 	void main();
 	bool newData();
+
 protected:
 	bmp390_param_t _param;
 	bmp390_state_t _state;
-	bmp3_dev _dev;
-	bool ReadCalData();
+	//bmp3_dev _dev;
+
 	bool Reset();
 	bool ReadStatusReg();
 	bool ReadEventReg();
@@ -158,8 +173,9 @@ protected:
 	bool ReadTempPressure();
 	uint8_t rev_id;
 	bool _newData;
-	BMP390_calib_data _calib_data;
-	union{
+	bool startMeasurement();
+
+	typedef union{
 		struct {
 			uint8_t fatal_err : 1;
 			uint8_t cmd_err : 1;
@@ -168,7 +184,7 @@ protected:
 		bmp390_reg_t reg;
 	}err_reg;
 
-	union{
+	typedef union{
 		struct {
 			uint8_t : 4;
 			uint8_t cmd_rdy : 1;
@@ -177,14 +193,16 @@ protected:
 		}bit;
 		bmp390_reg_t reg;
 	}status_reg;
-	union{
+
+	typedef union{
 		struct {
 			uint8_t por_detected : 1;
 			uint8_t itf_act_pt : 1;
 		}bit;
 		bmp390_reg_t reg;
 	}event_reg;
-	union{
+
+	typedef union{
 		struct {
 			uint8_t fwm_int : 1;
 			uint8_t ffull_int : 1;
@@ -193,7 +211,8 @@ protected:
 		}bit;
 		bmp390_reg_t reg;
 	}int_status_reg;
-	union{
+
+	typedef union{
 		struct {
 			uint8_t fifo_mode : 1;
 			uint8_t fifo_stop_on_full : 1;
@@ -204,7 +223,7 @@ protected:
 		bmp390_reg_t reg;
 	}fifo_config_1_reg;
 
-	union{
+	typedef union{
 		struct{
 			uint8_t fifo_subsampling : 3;
 			uint8_t data_select : 2;
@@ -212,7 +231,7 @@ protected:
 		bmp390_reg_t reg;
 	}fifo_config_2_reg;
 
-	union{
+	typedef union{
 		struct{
 			uint8_t int_od : 1;
 			uint8_t int_level : 1;
@@ -225,7 +244,7 @@ protected:
 		bmp390_reg_t reg;
 	}int_ctrl_reg;
 
-	union{
+	typedef union{
 		struct{
 			uint8_t spi3 : 1 ;
 			uint8_t i2c_wdt_en : 1;
@@ -234,7 +253,7 @@ protected:
 		bmp390_reg_t reg;
 	}if_conf_reg;
 
-	union{
+	typedef union{
 		struct{
 			uint8_t press_en : 1 ;
 			uint8_t temp_en : 1;
@@ -244,7 +263,7 @@ protected:
 		bmp390_reg_t reg;
 	}pwr_ctrl_reg;
 
-	union {
+	typedef union {
 		struct{
 			uint8_t osr_p : 3;
 			uint8_t osr4_t : 3;
@@ -252,14 +271,14 @@ protected:
 		bmp390_reg_t reg;
 	}osr_reg;
 
-	union {
+	typedef union {
 		struct {
 			uint8_t odr_sel : 5;
 		}bit;
 		bmp390_reg_t reg;
 	}odr_reg;
 
-	union{
+	typedef union{
 		struct{
 			uint8_t short_in : 1;
 			uint8_t iir_filter : 3;
@@ -268,24 +287,12 @@ protected:
 		bmp390_reg_t reg;
 	}bmp3x_config_reg_t;
 
-	bmp3x_config_reg_t _config;
+	bmp3x_config_reg_t _config_reg;
+
 	uint32_t last_update;
 private:
-	float temp,pressure;
-	int8_t NVM_PAR_P11;
-	int8_t NVM_PAR_P10;
-	int16_t NVM_PAR_P9;
-	int8_t NVM_PAR_P8;
-	int8_t NVM_PAR_P7;
-	uint16_t NVM_PAR_P6;
-	uint16_t NVM_PAR_P5;
-	int8_t NVM_PAR_P4;
-	int8_t NVM_PAR_P3;
-	int16_t NVM_PAR_P2;
-	int16_t NVM_PAR_P1;
-	int8_t NVM_PAR_T3;
-	uint16_t NVM_PAR_T2;
-	uint16_t NVM_PAR_T1;
+	bmp3_data data;
+	float _temp,_pressure;
 };
 
 } /* namespace bmp390 */

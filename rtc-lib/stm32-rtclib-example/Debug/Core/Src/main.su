@@ -7,7 +7,7 @@
 ../Core/Src/main.cpp:273:13:void MX_RTC_Init()	32	static
 ../Core/Src/main.cpp:337:13:void MX_USART1_UART_Init()	8	static
 ../Core/Src/main.cpp:372:13:void MX_GPIO_Init()	16	static
-../Core/Src/main.cpp:399:6:void StartDefaultTask(void*)	56	static
-../Core/Src/main.cpp:422:6:void Error_Handler()	4	static,ignoring_inline_asm
-../Core/Src/main.cpp:431:1:void __static_initialization_and_destruction_0()	8	static
-../Core/Src/main.cpp:431:1:cpp)	8	static
+../Core/Src/main.cpp:399:6:void StartDefaultTask(void*)	40	static
+../Core/Src/main.cpp:421:6:void Error_Handler()	4	static,ignoring_inline_asm
+../Core/Src/main.cpp:430:1:void __static_initialization_and_destruction_0()	8	static
+../Core/Src/main.cpp:430:1:cpp)	8	static

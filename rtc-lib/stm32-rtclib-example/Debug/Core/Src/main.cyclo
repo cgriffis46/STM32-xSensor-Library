@@ -8,6 +8,6 @@
 ../Core/Src/main.cpp:337:13:void MX_USART1_UART_Init()	2
 ../Core/Src/main.cpp:372:13:void MX_GPIO_Init()	1
 ../Core/Src/main.cpp:399:6:void StartDefaultTask(void*)	1
-../Core/Src/main.cpp:422:6:void Error_Handler()	1
-../Core/Src/main.cpp:431:1:void __static_initialization_and_destruction_0()	1
-../Core/Src/main.cpp:431:1:cpp)	1
+../Core/Src/main.cpp:421:6:void Error_Handler()	1
+../Core/Src/main.cpp:430:1:void __static_initialization_and_destruction_0()	1
+../Core/Src/main.cpp:430:1:cpp)	1
