@@ -1,6 +1,6 @@
-#include "RTClib.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include "../inc/RTClib.h"
 
 #define PCF8563_READ_ADDRESS 0xA3       ///< I2C address for PCF8563
 #define PCF8563_WRITE_ADDRESS 0xA2 

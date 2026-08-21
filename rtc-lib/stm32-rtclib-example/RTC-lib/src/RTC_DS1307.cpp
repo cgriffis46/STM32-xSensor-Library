@@ -1,4 +1,4 @@
-#include "RTClib.h"
+#include "../inc/RTClib.h"
 
 #define DS1307_ADDRESS 0x68 ///< I2C address for DS1307
 #define DS1307_CONTROL 0x07 ///< Control register

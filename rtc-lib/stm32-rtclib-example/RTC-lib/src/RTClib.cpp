@@ -43,7 +43,7 @@
 */
 /**************************************************************************/
 
-#include "RTClib.h"
+#include "../inc/RTClib.h"
 #include <string.h>
 #include <strings.h>
 #include <stdlib.h>

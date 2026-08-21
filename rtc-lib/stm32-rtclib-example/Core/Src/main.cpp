@@ -22,11 +22,10 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "../../RTC-lib/include/RTClib.h"
-
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include "../../RTC-lib/inc/RTClib.h"
 
 /* USER CODE END Includes */
 
@@ -119,7 +118,7 @@ int main(void)
   MX_RTC_Init();
   /* USER CODE BEGIN 2 */
   rtc.begin(DS1307_ADDR);
-  _now=rtc.now();
+  //_now=rtc.now();
 
   //
   /* USER CODE END 2 */

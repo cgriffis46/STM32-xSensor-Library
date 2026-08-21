@@ -55,7 +55,7 @@ bool bmp390::Reset(){
 }
 
 bool bmp390::ReadStatusReg(){
-//	return ReadReg8(&status_reg.reg,bmp390_reg_status_addr);
+//	return ReadReg8(&status_reg.reg,bmp390_re0g_status_addr);
 	return false;
 }
 

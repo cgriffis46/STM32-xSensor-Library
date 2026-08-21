@@ -1,5 +1,5 @@
 RTC-lib/src/RTC_DS1307.o: ../RTC-lib/src/RTC_DS1307.cpp \
- D:/Documents/STM32_xSensor_Library/STM32\ xSensor\ Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h \
+ ../RTC-lib/src/../inc/RTClib.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal.h \
  ../Core/Inc/stm32l4xx_hal_conf.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_rcc.h \
@@ -31,7 +31,7 @@ RTC-lib/src/RTC_DS1307.o: ../RTC-lib/src/RTC_DS1307.cpp \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_rtc_ex.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_uart.h \
  ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_uart_ex.h
-D:/Documents/STM32_xSensor_Library/STM32\ xSensor\ Library/rtc-lib/stm32-rtclib-example/RTC-lib/include/RTClib.h:
+../RTC-lib/src/../inc/RTClib.h:
 ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal.h:
 ../Core/Inc/stm32l4xx_hal_conf.h:
 ../Drivers/STM32L4xx_HAL_Driver/Inc/stm32l4xx_hal_rcc.h:
