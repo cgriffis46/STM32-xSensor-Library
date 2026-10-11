@@ -4,15 +4,17 @@ STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combine
 
 | Part | Library | Interface |
 |------|---------|-----------|
-| DS1307 real-time clock | `RTC-lib` (RTClib port) | I2C1, address 0x68 |
+| DS1307 real-time clock | `isensor/ds1307`: `xds1307<Stm32HalI2CTransport>` | I2C1, address 0x68 |
 | SSD1306 128x64 OLED | `iDisplay/ssd1306`: `xssd1306<Stm32HalI2CTransport>` | I2C1, address 0x3C |
 | MTK3333 GPS (e.g. CDtop PA1616D, Quectel L80/L86) | `isensor/mtk3339`: `xmtk3339<Stm32HalUartTransport>` | USART1, 9600 baud |
 
-The SSD1306 and GPS drivers are the non-blocking ones from
+All three drivers are the non-blocking ones from
 [Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport), copied into
-the project unchanged (`iTransport/`, `isensor/`, `iDisplay/`; the commit is in
-`iTransport/SOURCE.txt`). The mtk3339 driver is written for the MT3339; the MT3333
-uses the same NMEA and PMTK commands.
+the project unchanged (`iTransport/`, `isensor/`, `iDisplay/`; the commits are in
+`iTransport/SOURCE.txt`). The ds1307 driver was written for this example and is on
+Claude-iTransport's `claude/ds1307-driver` branch, not yet merged there. The
+mtk3339 driver is written for the MT3339; the MT3333 uses the same NMEA and PMTK
+commands.
 
 The DS1307 time is shown on the SSD1306 once a second. Once the GPS has a valid fix,
 the DS1307 is set from GPS time (UTC), then re-synced every hour.
@@ -51,16 +53,19 @@ The DS1307 is kept in UTC. To show local time, set `UTC_OFFSET_MINUTES` in
 * `gpsTask`: runs `xmtk3339::main()`, which sleeps until the UART interrupt
   wakes it at the end of each NMEA line. On start-up (and whenever the module
   reports `$PMTK010,001`) the driver sends PMTK314 (RMC + GGA), PMTK220 (1 Hz)
-  and PMTK300, waiting for each `$PMTK001` ack. When there is a fix, it sets the
-  DS1307 from GPS time (UTC).
-* `displayTask`: reads the DS1307, draws the screen into the SSD1306's frame
-  buffer when the second changes, and runs `xssd1306::main()` until the flush is
-  out. The driver sends only the pages that changed, 32 bytes per interrupt-driven
-  I2C transfer. It also prints the time and GPS state to the debug UART.
+  and PMTK300, waiting for each `$PMTK001` ack. It publishes the fix, the
+  satellites and, with a fix, the UTC time from each RMC.
+* `displayTask`: owns the DS1307 and the SSD1306, since neither driver is
+  locked. `xds1307::main()` reads the clock every 100 ms in one 7-byte
+  transfer. On the first GPS time with a fix (and hourly after) it calls
+  `setTime()`, which writes all seven registers in one transfer and reads them
+  back. When the second changes it draws the screen into the SSD1306's frame
+  buffer and runs `xssd1306::main()` until the flush is out; the driver sends
+  only the pages that changed, 32 bytes per interrupt-driven I2C transfer. It
+  also prints the time and GPS state to the debug UART.
 
-The DS1307 and SSD1306 share I2C1 and one mutex, `i2c1_mutex`. The SSD1306's
-transport holds it for each transfer; the DS1307 code (RTC-lib, blocking HAL
-calls) takes it around each access.
+The DS1307 and SSD1306 transports share I2C1 and `i2c1_mutex`; each holds it
+for one transfer at a time.
 
 ## Requirements of the iTransport drivers
 
@@ -76,8 +81,10 @@ calls) takes it around each access.
 ## Not verified
 
 * Not run on hardware yet; only built with arm-none-eabi-gcc 13 using the
-  CubeIDE flags. The drivers' own host tests (`mtk3339_test`, `nmea_parser_test`,
-  `ssd1306_test`) pass at the vendored commit.
+  CubeIDE flags. The drivers' own host tests (`ds1307_test`, `mtk3339_test`,
+  `nmea_parser_test`, `ssd1306_test`) pass at the vendored commits.
+* The DS1307 is a 100 kHz part. I2C1 runs at about 100 kHz (`Timing`
+  0x00100D14 at a 4 MHz PCLK1); keep it in standard mode if the clock changes.
 * Whether every MT3333 module acknowledges PMTK300 has not been checked. If one
   rejects it, the driver reports the configuration as `rejected` on the debug UART
   and carries on with what the module sends.

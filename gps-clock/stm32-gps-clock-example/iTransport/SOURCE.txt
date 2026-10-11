@@ -13,6 +13,9 @@ Copied unchanged; only the files this example needs:
   isensor/inc                    <- isensor/inc/SensorStateMachine.h
   isensor/nmea                   <- isensor/nmea (NmeaParser, ByteRing)
   isensor/mtk3339                <- isensor/mtk3339
+  isensor/ds1307                 <- isensor/ds1307 (inc, src), from commit b2b072e on the
+                                    branch claude/ds1307-driver, on top of 94c4089; not yet
+                                    in Claude-iTransport's main
   iDisplay/inc, src              <- iDisplay/inc, src (MonoCanvas, iTextSurface, Font5x7, iDisplayDevice)
   iDisplay/ssd1306               <- iDisplay/ssd1306
 
