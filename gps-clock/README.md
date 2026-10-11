@@ -5,8 +5,14 @@ STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combine
 | Part | Library | Interface |
 |------|---------|-----------|
 | DS1307 real-time clock | `RTC-lib` (RTClib port) | I2C1, address 0x68 |
-| SSD1306 128x64 OLED | `SSD1306` | I2C1, address 0x3C |
-| MTK3333 GPS (e.g. Adafruit Ultimate GPS, Quectel L80/L86) | `MTK3333` | USART1, 9600 baud |
+| SSD1306 128x64 OLED | `iDisplay/ssd1306`: `xssd1306<Stm32HalI2CTransport>` | I2C1, address 0x3C |
+| MTK3333 GPS (e.g. CDtop PA1616D, Quectel L80/L86) | `isensor/mtk3339`: `xmtk3339<Stm32HalUartTransport>` | USART1, 9600 baud |
+
+The SSD1306 and GPS drivers are the non-blocking ones from
+[Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport), copied into
+the project unchanged (`iTransport/`, `isensor/`, `iDisplay/`; the commit is in
+`iTransport/SOURCE.txt`). The mtk3339 driver is written for the MT3339; the MT3333
+uses the same NMEA and PMTK commands.
 
 The DS1307 time is shown on the SSD1306 once a second. Once the GPS has a valid fix,
 the DS1307 is set from GPS time (UTC), then re-synced every hour.
@@ -42,48 +48,36 @@ The DS1307 is kept in UTC. To show local time, set `UTC_OFFSET_MINUTES` in
 
 ## Tasks
 
-* `gpsTask`: parses NMEA from the GPS and sets the DS1307 when there is a valid fix.
-* `displayTask`: reads the DS1307 and redraws the SSD1306 when the second changes,
-  and prints the time to the debug UART.
+* `gpsTask`: runs `xmtk3339::main()`, which sleeps until the UART interrupt
+  wakes it at the end of each NMEA line. On start-up (and whenever the module
+  reports `$PMTK010,001`) the driver sends PMTK314 (RMC + GGA), PMTK220 (1 Hz)
+  and PMTK300, waiting for each `$PMTK001` ack. When there is a fix, it sets the
+  DS1307 from GPS time (UTC).
+* `displayTask`: reads the DS1307, draws the screen into the SSD1306's frame
+  buffer when the second changes, and runs `xssd1306::main()` until the flush is
+  out. The driver sends only the pages that changed, 32 bytes per interrupt-driven
+  I2C transfer. It also prints the time and GPS state to the debug UART.
 
-The DS1307 and SSD1306 share I2C1, so every I2C access holds `i2c1_mutex`.
+The DS1307 and SSD1306 share I2C1 and one mutex, `i2c1_mutex`. The SSD1306's
+transport holds it for each transfer; the DS1307 code (RTC-lib, blocking HAL
+calls) takes it around each access.
 
-## Libraries
+## Requirements of the iTransport drivers
 
-### SSD1306 (`SSD1306/`)
+* I2C1 event and error interrupts and the USART1 interrupt enabled, priority 5
+  (numerically at or above `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, since they wake
+  FreeRTOS threads). Set in the .ioc and `stm32l4xx_hal_msp.c`.
+* `USE_HAL_I2C_REGISTER_CALLBACKS` and `USE_HAL_UART_REGISTER_CALLBACKS` are 0:
+  the HAL callbacks are defined in `iTransport/hw/stm32/src/Stm32*ItCallbacks.cpp`.
+  Don't define `HAL_UART_RxCpltCallback` etc. in `main.cpp`.
+* The drivers are built inside their tasks (function statics), after
+  `i2c1_mutex` has been created and the UART has been initialised.
 
-```cpp
-SSD1306 oled(&hi2c1);               // 0x3C, 128x64
-oled.begin();
-oled.clear();
-oled.drawString(0, 0, "Hello");
-oled.drawStringCentered(20, "12:34", 2);   // 2x scale
-oled.display();                     // push the frame buffer over I2C
-```
+## Not verified
 
-### MTK3333 (`MTK3333/`)
-
-Bytes are received by interrupt into a ring buffer; `update()` parses RMC and GGA
-sentences (any talker: GP/GN/GL).
-
-```cpp
-MTK3333 gps(&huart1);
-
-extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) { gps.rxCpltCallback(huart); }
-extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)  { gps.errorCallback(huart); }
-
-gps.begin();
-gps.setNmeaOutput(true, true);      // RMC + GGA
-gps.setUpdateRate(1000);            // 1 Hz
-
-for (;;) {
-  gps.update();
-  if (gps.newData()) {
-    GPS_Data d;
-    gps.getData(&d);                // d.fix, d.hour..., d.latitudeE6, d.satellites, ...
-  }
-  osDelay(20);
-}
-```
-
-The USART1 interrupt must be enabled (done in `stm32l4xx_hal_msp.c` / the .ioc).
+* Not run on hardware yet; only built with arm-none-eabi-gcc 13 using the
+  CubeIDE flags. The drivers' own host tests (`mtk3339_test`, `nmea_parser_test`,
+  `ssd1306_test`) pass at the vendored commit.
+* Whether every MT3333 module acknowledges PMTK300 has not been checked. If one
+  rejects it, the driver reports the configuration as `rejected` on the debug UART
+  and carries on with what the module sends.

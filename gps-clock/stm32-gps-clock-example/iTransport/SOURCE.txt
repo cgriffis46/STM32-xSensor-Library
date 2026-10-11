@@ -1,0 +1,22 @@
+Vendored from https://github.com/cgriffis46/Claude-iTransport
+commit 94c408947e37d006876e6cd7960c81354a84cea3 (MIT, see iTransport/LICENSE)
+
+Copied unchanged; only the files this example needs:
+
+  iTransport/inc, src            <- iTransport/itransport/inc, src
+                                    (BusTransport, I2CTransport, OneWireUartTransport,
+                                    DebugLog, ISensorTransport, iTransport, iTransportOneWire)
+  iTransport/hw/freertos/inc     <- iTransport/itransport/hw/freertos/inc (FreeRtosTransport)
+  iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
+                                    (Stm32HalI2CTransport, Stm32HalUartTransport and the
+                                    HAL I2C/UART interrupt callbacks)
+  isensor/inc                    <- isensor/inc/SensorStateMachine.h
+  isensor/nmea                   <- isensor/nmea (NmeaParser, ByteRing)
+  isensor/mtk3339                <- isensor/mtk3339
+  iDisplay/inc, src              <- iDisplay/inc, src (MonoCanvas, iTextSurface, Font5x7, iDisplayDevice)
+  iDisplay/ssd1306               <- iDisplay/ssd1306
+
+OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it.
+
+To update: copy the same files from a newer Claude-iTransport commit and
+change the commit above. Fix bugs in Claude-iTransport, not here.

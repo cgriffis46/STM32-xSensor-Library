@@ -8,6 +8,15 @@
   *  The time is read from the DS1307 and shown on the SSD1306. Once the
   *  GPS has a valid fix the DS1307 is set from GPS (UTC) time.
   *
+  *  The SSD1306 and the GPS use the non-blocking drivers from
+  *  Claude-iTransport (see iTransport/SOURCE.txt):
+  *    xssd1306<Stm32HalI2CTransport>   iDisplay/ssd1306
+  *    xmtk3339<Stm32HalUartTransport>  isensor/mtk3339 (the MT3333 speaks the
+  *                                     same NMEA/PMTK as the MT3339)
+  *  The DS1307 still uses RTC-lib's blocking HAL calls, so it takes
+  *  i2c1_mutex itself, the same mutex the SSD1306's transport holds for
+  *  each of its transfers.
+  *
   *  Wiring (NUCLEO-L432KC):
   *    I2C1_SCL  PA9  (D1)  -> DS1307 SCL, SSD1306 SCL
   *    I2C1_SDA  PA10 (D0)  -> DS1307 SDA, SSD1306 SDA
@@ -38,15 +47,29 @@
 #include <string.h>
 #include <stdlib.h>
 #include "RTClib.h"
-#include "SSD1306.h"
-#include "MTK3333.h"
+#include "Stm32HalI2CTransport.h"
+#include "Stm32HalUartTransport.h"
+#include "xssd1306.h"
+#include "xmtk3339.h"
+#include "Font5x7.h"
 
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef SSD1306::xssd1306<Stm32HalI2CTransport, 64> OledDisplay;
+typedef xmtk3339<Stm32HalUartTransport> GpsReceiver;
 
-/* USER CODE END PTD */
+// What displayTask needs from the GPS, copied out by gpsTask
+typedef struct {
+  bool     alive;          // the GPS is sending good NMEA
+  bool     fix;
+  uint8_t  satellites;     // used in the fix (GGA)
+  int32_t  latitudeE7;     // 1e-7 degrees
+  int32_t  longitudeE7;
+  mtk3339_config_status_t config;
+} GpsStatus;
+/* USER CODE END PTD *//* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
@@ -56,10 +79,10 @@
 // Re-sync the DS1307 from GPS this often once it has been set
 #define RTC_RESYNC_INTERVAL_MS  (60UL * 60UL * 1000UL)
 
-// "GPS no data" is shown if no RMC sentence arrives for this long
-#define GPS_TIMEOUT_MS          3000UL
-
 #define I2C_PROBE_TIMEOUT_MS    10
+// Bounded, never osWaitForever: displayTask also owns the SSD1306, whose
+// transport holds this mutex while a transfer is in flight
+#define I2C_MUTEX_TIMEOUT_MS    100
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -99,12 +122,9 @@ const osMutexAttr_t gps_data_mutex_attributes = {
 };
 /* USER CODE BEGIN PV */
 RTC_DS1307 rtc(&hi2c1);
-SSD1306 oled(&hi2c1, SSD1306_I2C_ADDR, 128, 64);
-MTK3333 gps(&huart1);
 
 // Shared between gpsTask (writer) and displayTask (reader), guarded by gps_data_mutex
-static GPS_Data gpsSnapshot;
-static uint32_t gpsLastRmcTick = 0;     // 0 = never received
+static GpsStatus gpsStatus;
 static bool rtcSynced = false;
 static DateTime rtcLastSync;            // UTC time of the last GPS -> RTC sync
 
@@ -121,76 +141,105 @@ void StartGpsTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 static void debugPrint(const char *str);
-static void drawScreen(bool rtcOk, bool rtcRunning, const DateTime &utc, const GPS_Data &g,
-                       bool gpsAlive, bool synced, const DateTime &lastSync);
+static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, const DateTime &utc,
+                       const GpsStatus &g, bool synced, const DateTime &lastSync);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 static const char *const dayNames[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
 
+// The HAL UART and I2C interrupt callbacks are in iTransport/hw/stm32/src
+// (Stm32UartItCallbacks.cpp, Stm32I2CItCallbacks.cpp): don't define them here.
+
 static void debugPrint(const char *str)
 {
   HAL_UART_Transmit(&huart2, (uint8_t*) str, strlen(str), 100);
 }
 
-/* HAL UART callbacks are C functions: they must have C linkage to replace the weak HAL versions */
-extern "C" void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+static const char *configName(mtk3339_config_status_t s)
 {
-  gps.rxCpltCallback(huart);
+  switch (s) {
+  case mtk3339_config_status_t::Done:     return "done";
+  case mtk3339_config_status_t::Rejected: return "rejected";
+  case mtk3339_config_status_t::NoAnswer: return "no answer";
+  default:                                return "pending";
+  }
 }
 
-extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+// "37.77490N 122.41940W" from 1e-7 degrees, without printf float support
+static void formatPosition(char *out, size_t len, int32_t latE7, int32_t lonE7)
 {
-  gps.errorCallback(huart);
-}
-
-// "37.77490N 122.41940W" from micro-degrees, without printf float support
-static void formatPosition(char *out, size_t len, int32_t latE6, int32_t lonE6)
-{
-  long lat = labs(latE6), lon = labs(lonE6);
+  long lat = labs(latE7), lon = labs(lonE7);
   snprintf(out, len, "%ld.%05ld%c %ld.%05ld%c",
-           lat / 1000000L, (lat % 1000000L) / 10, latE6 < 0 ? 'S' : 'N',
-           lon / 1000000L, (lon % 1000000L) / 10, lonE6 < 0 ? 'W' : 'E');
+           lat / 10000000L, (lat % 10000000L) / 100, latE7 < 0 ? 'S' : 'N',
+           lon / 10000000L, (lon % 10000000L) / 100, lonE7 < 0 ? 'W' : 'E');
 }
 
-static void drawScreen(bool rtcOk, bool rtcRunning, const DateTime &utc, const GPS_Data &g,
-                       bool gpsAlive, bool synced, const DateTime &lastSync)
+// MonoCanvas draws text in 6x8 cells; this draws it `scale` times larger
+static void drawTextScaled(idisplay::MonoCanvas &c, int16_t x, int16_t y, const char *s, uint8_t scale)
+{
+  for (; *s; ++s, x += (int16_t)(idisplay::MonoCanvas::kCellWidth * scale)) {
+    const uint8_t *glyph = idisplay::fontGlyph(*s);
+    for (uint8_t col = 0; col < idisplay::kFontWidth; ++col)
+      for (uint8_t row = 0; row < idisplay::kFontHeight; ++row)
+        if (glyph[col] & (1u << row))
+          c.fillRect(x + col * scale, y + row * scale, scale, scale, true);
+  }
+}
+
+static int16_t centeredX(const idisplay::MonoCanvas &c, const char *s, uint8_t scale)
+{
+  // the blank column after the last character is not counted
+  int16_t w = (int16_t)((strlen(s) * idisplay::MonoCanvas::kCellWidth - 1) * scale);
+  return w >= (int16_t) c.width() ? 0 : (int16_t)((c.width() - w) / 2);
+}
+
+static void drawCentered(idisplay::MonoCanvas &c, int16_t y, const char *s, uint8_t scale = 1)
+{
+  if (scale == 1)
+    c.drawText(centeredX(c, s, 1), y, s, false);
+  else
+    drawTextScaled(c, centeredX(c, s, scale), y, s, scale);
+}
+
+static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, const DateTime &utc,
+                       const GpsStatus &g, bool synced, const DateTime &lastSync)
 {
   char line[32];
 
-  oled.clear();
+  c.clear();
 
   // Line 1: GPS status
-  if (!gpsAlive)
+  if (!g.alive)
     snprintf(line, sizeof(line), "GPS: no data");
   else if (g.fix)
     snprintf(line, sizeof(line), "GPS: fix  %u sats", g.satellites);
   else
     snprintf(line, sizeof(line), "GPS: no fix %u sats", g.satellites);
-  oled.drawString(0, 0, line);
-  oled.drawHLine(0, 9, oled.width());
+  c.drawText(0, 0, line, false);
+  c.drawHLine(0, 9, c.width(), true);
 
   if (rtcOk) {
     DateTime local = utc + TimeSpan((int32_t) UTC_OFFSET_MINUTES * 60);
 
     // Time, double size
     snprintf(line, sizeof(line), "%02d:%02d:%02d", local.hour(), local.minute(), local.second());
-    oled.drawStringCentered(14, line, 2);
+    drawCentered(c, 14, line, 2);
 
     // Date
-    snprintf(line, sizeof(line), "%s %04d-%02d-%02d %s", dayNames[local.dayOfTheWeek()],
-             local.year(), local.month(), local.day(), UTC_OFFSET_MINUTES == 0 ? "UTC" : "");
-    oled.drawStringCentered(32, line);
+    snprintf(line, sizeof(line), "%s %04d-%02d-%02d%s", dayNames[local.dayOfTheWeek()],
+             local.year(), local.month(), local.day(), UTC_OFFSET_MINUTES == 0 ? " UTC" : "");
+    drawCentered(c, 32, line);
   } else {
-    oled.drawStringCentered(14, "--:--:--", 2);
-    oled.drawStringCentered(32, "DS1307 not found");
+    drawCentered(c, 14, "--:--:--", 2);
+    drawCentered(c, 32, "DS1307 not found");
   }
 
   // Position
-  if (gpsAlive && g.fix) {
-    formatPosition(line, sizeof(line), g.latitudeE6, g.longitudeE6);
-    oled.drawStringCentered(44, line);
+  if (g.alive && g.fix) {
+    formatPosition(line, sizeof(line), g.latitudeE7, g.longitudeE7);
+    drawCentered(c, 44, line);
   }
 
   // RTC sync status
@@ -200,7 +249,7 @@ static void drawScreen(bool rtcOk, bool rtcRunning, const DateTime &utc, const G
     snprintf(line, sizeof(line), "RTC stopped, wait GPS");
   else
     snprintf(line, sizeof(line), "RTC not synced");
-  oled.drawString(0, 56, line);
+  c.drawText(0, 56, line, false);
 }
 /* USER CODE END 0 */
 
@@ -239,12 +288,8 @@ int main(void)
   debugPrint("\r\nSTM32L432KC GPS clock: DS1307 + SSD1306 + MTK3333\r\n");
 
   rtc.begin(DS1307_ADDR);
-  if (!oled.begin())
-    debugPrint("SSD1306 not found at 0x3C\r\n");
-
-  gps.begin();
-  gps.setNmeaOutput(true, true);   // RMC + GGA only
-  gps.setUpdateRate(1000);         // 1 Hz
+  // The SSD1306 and GPS drivers are created in their tasks, once the
+  // scheduler is running and i2c1_mutex exists.
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -499,45 +544,65 @@ static void MX_GPIO_Init(void)
 void StartDisplayTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  char msg[96];
+  // Built here, not as a global: the transport needs i2c1_mutex, which
+  // only exists once main() has created it. Static, to keep the 1 KB
+  // frame buffer off this task's stack.
+  static OledDisplay oled(SSD1306::ssd1306_default_param(64), &hi2c1, SSD1306_I2C_ADDR, i2c1_mutexHandle);
+
+  char msg[112];
   int lastSecond = -1;
   bool lastRtcOk = true;
+  bool redrawPending = false;
+  bool rtcOk = false, rtcRunning = false;
+  DateTime now(SECONDS_FROM_1970_TO_2000);
+  GpsStatus g;
+  bool synced = false;
+  DateTime lastSync;
 
   /* Infinite loop */
   for(;;)
   {
-    osMutexAcquire(i2c1_mutexHandle, osWaitForever);
-    bool rtcOk = HAL_I2C_IsDeviceReady(&hi2c1, DS1307_ADDR << 1, 2, I2C_PROBE_TIMEOUT_MS) == HAL_OK;
-    bool rtcRunning = rtcOk && rtc.isrunning();
-    DateTime now = rtcOk ? rtc.now() : DateTime(SECONDS_FROM_1970_TO_2000);
-    osMutexRelease(i2c1_mutexHandle);
+    // DS1307: blocking RTC-lib calls, so take the bus for them
+    if (osMutexAcquire(i2c1_mutexHandle, I2C_MUTEX_TIMEOUT_MS) == osOK) {
+      rtcOk = HAL_I2C_IsDeviceReady(&hi2c1, DS1307_ADDR << 1, 2, I2C_PROBE_TIMEOUT_MS) == HAL_OK;
+      rtcRunning = rtcOk && rtc.isrunning();
+      now = rtcOk ? rtc.now() : DateTime(SECONDS_FROM_1970_TO_2000);
+      osMutexRelease(i2c1_mutexHandle);
+    }
 
     if (now.second() != lastSecond || rtcOk != lastRtcOk) {
       lastSecond = now.second();
       lastRtcOk = rtcOk;
+      redrawPending = true;
 
-      GPS_Data g;
-      bool synced;
-      DateTime lastSync;
       osMutexAcquire(gps_data_mutexHandle, osWaitForever);
-      g = gpsSnapshot;
-      bool gpsAlive = gpsLastRmcTick != 0 && (osKernelGetTickCount() - gpsLastRmcTick) < GPS_TIMEOUT_MS;
+      g = gpsStatus;
       synced = rtcSynced;
       lastSync = rtcLastSync;
       osMutexRelease(gps_data_mutexHandle);
 
-      drawScreen(rtcOk, rtcRunning, now, g, gpsAlive, synced, lastSync);
-
-      osMutexAcquire(i2c1_mutexHandle, osWaitForever);
-      oled.display();
-      osMutexRelease(i2c1_mutexHandle);
-
-      snprintf(msg, sizeof(msg), "RTC %04d-%02d-%02d %02d:%02d:%02d UTC | GPS %s sats=%u%s\r\n",
+      snprintf(msg, sizeof(msg), "RTC %04d-%02d-%02d %02d:%02d:%02d UTC | GPS %s sats=%u cfg=%s%s%s\r\n",
                now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second(),
-               !gpsAlive ? "no data" : (g.fix ? "fix" : "no fix"), g.satellites,
-               rtcOk ? "" : " | DS1307 not found");
+               !g.alive ? "no data" : (g.fix ? "fix" : "no fix"), g.satellites, configName(g.config),
+               rtcOk ? "" : " | DS1307 not found", oled.failed() ? " | SSD1306 not responding" : "");
       debugPrint(msg);
     }
+
+    // Draw only between flushes (iDisplayDevice rule). The driver sends
+    // just the pages that changed.
+    if (redrawPending && oled.idle()) {
+      redrawPending = false;
+      drawScreen(oled, rtcOk, rtcRunning, now, g, synced, lastSync);
+      oled.requestFlush();
+    }
+
+    // Run the display's state machine until the flush is out (it sleeps
+    // in osThreadFlagsWait while each transfer is in flight). In the
+    // error state one call waits out part of the back-off and returns.
+    do {
+      oled.main(osKernelGetTickCount());
+    } while (!oled.idle() && !oled.failed());
+
     osDelay(100);
   }
   /* USER CODE END 5 */
@@ -545,7 +610,7 @@ void StartDisplayTask(void *argument)
 
 /* USER CODE BEGIN Header_StartGpsTask */
 /**
-  * @brief  Parses NMEA from the GPS and sets the DS1307 once the GPS has a fix.
+  * @brief  Runs the GPS driver and sets the DS1307 once the GPS has a fix.
   * @param  argument: Not used
   * @retval None
   */
@@ -553,46 +618,62 @@ void StartDisplayTask(void *argument)
 void StartGpsTask(void *argument)
 {
   /* USER CODE BEGIN StartGpsTask */
-  GPS_Data g;
+  mtk3339_param_t param(true);              // configure the module
+  param.updateMs = 1000;                    // 1 Hz
+  param.sentences = mtk3339_sentence_bit(pmtk::Nmea::RMC) | mtk3339_sentence_bit(pmtk::Nmea::GGA);
+
+  // Built here so reception starts after MX_USART1_UART_Init(); main()
+  // must be called from this one thread (it is the one wake() wakes).
+  static GpsReceiver gps(param, &huart1);
+  static GnssData d;                        // ~400 bytes: kept off the stack
+
+  bool haveData = false;
   uint32_t lastSyncTick = 0;
   bool synced = false;
 
   /* Infinite loop */
   for(;;)
   {
-    gps.update();
+    // Sleeps inside until a line arrives (woken from the UART interrupt) or 100 ms
+    gps.main(osKernelGetTickCount());
 
-    if (gps.newData()) {
-      gps.getData(&g);
+    bool fresh = gps.newData();
+    if (fresh)
+      haveData = gps.getData(&d);
+    if (gps.state() == mtk3339_error_state)
+      haveData = false;                     // silent for 3 s: nothing is valid
 
-      osMutexAcquire(gps_data_mutexHandle, osWaitForever);
-      gpsSnapshot = g;
-      gpsLastRmcTick = osKernelGetTickCount();
-      if (gpsLastRmcTick == 0)
-        gpsLastRmcTick = 1;
-      osMutexRelease(gps_data_mutexHandle);
+    osMutexAcquire(gps_data_mutexHandle, osWaitForever);
+    gpsStatus.alive = haveData;
+    gpsStatus.fix = haveData && d.positionValid;
+    gpsStatus.satellites = haveData ? d.satellitesUsed : 0;
+    gpsStatus.latitudeE7 = d.latitudeE7;
+    gpsStatus.longitudeE7 = d.longitudeE7;
+    gpsStatus.config = gps.configStatus();
+    osMutexRelease(gps_data_mutexHandle);
 
-      // Set the DS1307 from GPS (UTC) on the first valid fix, then once per interval
-      if (g.dateValid && (!synced || (osKernelGetTickCount() - lastSyncTick) >= RTC_RESYNC_INTERVAL_MS)) {
-        DateTime gpsTime(g.year, g.month, g.day, g.hour, g.minute, g.second);
+    // Set the DS1307 from GPS (UTC) on the first valid fix, then once per interval
+    if (fresh && haveData && d.positionValid && d.dateValid && d.timeValid
+        && (!synced || (osKernelGetTickCount() - lastSyncTick) >= RTC_RESYNC_INTERVAL_MS)) {
+      DateTime gpsTime(d.year, d.month, d.day, d.hour, d.minute, d.second);
 
-        osMutexAcquire(i2c1_mutexHandle, osWaitForever);
-        bool rtcOk = HAL_I2C_IsDeviceReady(&hi2c1, DS1307_ADDR << 1, 2, I2C_PROBE_TIMEOUT_MS) == HAL_OK;
+      bool rtcOk = false;
+      if (osMutexAcquire(i2c1_mutexHandle, I2C_MUTEX_TIMEOUT_MS) == osOK) {
+        rtcOk = HAL_I2C_IsDeviceReady(&hi2c1, DS1307_ADDR << 1, 2, I2C_PROBE_TIMEOUT_MS) == HAL_OK;
         if (rtcOk)
           rtc.adjust(gpsTime);   // also clears the clock-halt bit
         osMutexRelease(i2c1_mutexHandle);
+      }
 
-        if (rtcOk) {
-          synced = true;
-          lastSyncTick = osKernelGetTickCount();
-          osMutexAcquire(gps_data_mutexHandle, osWaitForever);
-          rtcSynced = true;
-          rtcLastSync = gpsTime;
-          osMutexRelease(gps_data_mutexHandle);
-        }
+      if (rtcOk) {
+        synced = true;
+        lastSyncTick = osKernelGetTickCount();
+        osMutexAcquire(gps_data_mutexHandle, osWaitForever);
+        rtcSynced = true;
+        rtcLastSync = gpsTime;
+        osMutexRelease(gps_data_mutexHandle);
       }
     }
-    osDelay(20);
   }
   /* USER CODE END StartGpsTask */
 }
