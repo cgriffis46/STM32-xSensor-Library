@@ -8,9 +8,12 @@
   *  The time is read from the DS1307 and shown on the SSD1306. Once the
   *  GPS has a valid fix the DS1307 is set from GPS (UTC) time.
   *
-  *  A W5500 on SPI1 gives the board an address (DHCP), shown on the
-  *  display, and network time (SNTP), used to set the DS1307 when the GPS
-  *  has no fix.
+  *  The time from the GPS is applied to the STM32's own RTC (to a fraction
+  *  of a second) and from there to the DS1307. The STM32 RTC is what the
+  *  display shows and what the NTP server serves: a W5500 on SPI1 gives
+  *  the board an address (DHCP) and answers NTP requests on UDP port 123
+  *  from the STM32 RTC. Without a GPS fix, network time (SNTP) sets the
+  *  RTCs instead; after a power cycle the DS1307 seeds the STM32 RTC.
   *
   *  All four use the non-blocking drivers from Claude-iTransport
   *  (see iTransport/SOURCE.txt):
@@ -65,6 +68,8 @@
 #include "Stm32HalSpiBlockTransport.h"
 #include "W5500.h"
 #include "xEthernet.h"
+#include "NtpServer.h"
+#include "stm32_rtc.h"
 #include <atomic>
 #include "Font5x7.h"
 
@@ -72,7 +77,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef DS1307::xds1307<Stm32HalI2CTransport> RtcClock;
+typedef DS1307::xds1307<Stm32HalI2CTransport> Ds1307Clock;
 typedef SSD1306::xssd1306<Stm32HalI2CTransport, 64> OledDisplay;
 typedef xmtk3339<Stm32HalUartTransport> GpsReceiver;
 typedef DS1307::ds1307_time_t ClockTime;
@@ -104,12 +109,29 @@ typedef struct {
 // A GPS time older than this is not written to the DS1307
 #define GPS_TIME_MAX_AGE_MS     500UL
 
-// How often the DS1307 is read: the display shows a new second at most this late
-#define RTC_READ_PERIOD_MS      100UL
+// How often the DS1307 is read (it is a backup now: the STM32 RTC is the clock)
+#define DS1307_READ_PERIOD_MS   1000UL
 
-// Network time is written to the DS1307 only this close after a second
-// starts, since writing the seconds register restarts the chip's 1 Hz divider
-#define NTP_SET_WINDOW_MS       150UL
+// The DS1307 is written from the STM32 RTC only this close after a second
+// starts, since writing its seconds register restarts its 1 Hz divider
+#define DS1307_SET_WINDOW_MS    100UL
+
+// The STM32 RTC: LSE 32768 Hz / (PREDIV_A + 1) / (PREDIV_S + 1) = 1 Hz,
+// with PREDIV_S + 1 = 4096 sub-second steps (244 us, NTP precision -12)
+#define RTC_ASYNCH_PREDIV       7
+#define RTC_SYNCH_PREDIV        4095
+#define NTP_PRECISION_LOG2      (-12)
+
+// How late an NMEA RMC sentence is relative to the second it names. The GPS
+// time is applied with this much added. Measure it (against the module's PPS
+// output, or a good NTP server) and set it; 0 leaves the RTC late by it.
+#define GPS_NMEA_DELAY_MS       0
+// What the NTP server reports as the error of the time it was set to
+#define GPS_ROOT_DISPERSION_US  100000UL   // NMEA timing, without PPS
+#define NET_ROOT_DISPERSION_US  50000UL
+#define NET_STRATUM             3          // assumes an upstream stratum 2 server (pool.ntp.org mostly is)
+// After this long without a GPS or network set the NTP server says "not synchronised"
+#define NTP_HOLDOVER_S          (24UL * 3600UL)
 
 // Ethernet address: DHCP, or this static one
 #define ETH_DHCP                1
@@ -126,6 +148,8 @@ typedef struct {
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
+RTC_HandleTypeDef hrtc;
+
 SPI_HandleTypeDef hspi1;
 DMA_HandleTypeDef hdma_spi1_rx;
 DMA_HandleTypeDef hdma_spi1_tx;
@@ -137,7 +161,7 @@ UART_HandleTypeDef huart2;
 osThreadId_t displayTaskHandle;
 const osThreadAttr_t displayTask_attributes = {
   .name = "displayTask",
-  .stack_size = 512 * 4,
+  .stack_size = 768 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for gpsTask */
@@ -169,6 +193,11 @@ osMutexId_t spi1_mutexHandle;
 const osMutexAttr_t spi1_mutex_attributes = {
   .name = "spi1_mutex"
 };
+/* Definitions for rtc_mutex */
+osMutexId_t rtc_mutexHandle;
+const osMutexAttr_t rtc_mutex_attributes = {
+  .name = "rtc_mutex"
+};
 /* USER CODE BEGIN PV */
 // Written by gpsTask, read by displayTask, guarded by gps_data_mutex
 static GpsStatus gpsStatus;
@@ -177,6 +206,19 @@ static GpsStatus gpsStatus;
 // the INT pin's EXTI callback. xNetInterface's status calls are thread-safe.
 static std::atomic<xEthernet*> g_eth{nullptr};
 
+// The NTP server's clock: the STM32 RTC. Read in the W5500's driver thread
+// when a request arrives; a short wait for rtc_mutex at most.
+struct StmRtcNtpClock : NtpServer::Clock {
+  bool ntpNow(uint64_t *t) override {
+    uint32_t sec, frac;
+    if (!StmRtc_Read(&sec, &frac, 2)) return false;
+    *t = NtpServer::fromUnix(sec, frac);
+    return true;
+  }
+};
+static StmRtcNtpClock ntpClock;
+static NtpServer ntpServer(ntpClock, NTP_PRECISION_LOG2, 20);   // LSE: 20 ppm
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -184,6 +226,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_RTC_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
@@ -193,9 +236,8 @@ void StartEthTask(void *argument);
 
 /* USER CODE BEGIN PFP */
 static void debugPrint(const char *str);
-enum class SyncSource : uint8_t { None, Gps, Ntp };
-static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, const ClockTime &utc,
-                       const GpsStatus &g, const char *ethLine, SyncSource synced, const ClockTime &lastSync);
+static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &utc, const GpsStatus &g,
+                       const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -273,8 +315,8 @@ static void formatEth(char *out, size_t len)
     snprintf(out, len, "IP %s", eth->address().ip.format(ip));
 }
 
-static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, const ClockTime &utc,
-                       const GpsStatus &g, const char *ethLine, SyncSource synced, const ClockTime &lastSync)
+static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &utc, const GpsStatus &g,
+                       const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok)
 {
   char line[32];
 
@@ -290,7 +332,7 @@ static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, con
   c.drawText(0, 0, line, false);
   c.drawHLine(0, 9, c.width(), true);
 
-  if (rtcOk) {
+  if (clockSet) {
     ClockTime local;
     DS1307::ds1307_from_unix(DS1307::ds1307_to_unix(utc) + (int32_t) UTC_OFFSET_MINUTES * 60, &local);
 
@@ -304,7 +346,7 @@ static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, con
     drawCentered(c, 29, line);
   } else {
     drawCentered(c, 12, "--:--:--", 2);
-    drawCentered(c, 29, "DS1307 not found");
+    drawCentered(c, 29, "waiting for time");
   }
 
   // Position
@@ -316,14 +358,20 @@ static void drawScreen(idisplay::MonoCanvas &c, bool rtcOk, bool rtcRunning, con
   // Ethernet
   c.drawText(0, 47, ethLine, false);
 
-  // RTC sync status
-  if (synced != SyncSource::None)
-    snprintf(line, sizeof(line), "RTC synced %02u:%02uZ %s", lastSync.hour, lastSync.minute,
-             synced == SyncSource::Gps ? "GPS" : "NTP");
-  else if (rtcOk && !rtcRunning)
-    snprintf(line, sizeof(line), "RTC stopped, wait GPS");
-  else
-    snprintf(line, sizeof(line), "RTC not synced");
+  // Where the clock's time came from
+  switch (source) {
+  case RtcSource::Gps:
+  case RtcSource::Network:
+    snprintf(line, sizeof(line), "RTC synced %02u:%02uZ %s", lastSet.hour, lastSet.minute,
+             source == RtcSource::Gps ? "GPS" : "NTP");
+    break;
+  case RtcSource::Ds1307:
+    snprintf(line, sizeof(line), "RTC from DS1307");
+    break;
+  default:
+    snprintf(line, sizeof(line), ds1307Ok ? "RTC not set" : "RTC not set, no DS1307");
+    break;
+  }
   c.drawText(0, 56, line, false);
 }
 /* USER CODE END 0 */
@@ -361,6 +409,7 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_SPI1_Init();
+  MX_RTC_Init();
   /* USER CODE BEGIN 2 */
   debugPrint("\r\nSTM32L432KC GPS clock: DS1307 + SSD1306 + MTK3333\r\n");
 
@@ -380,8 +429,11 @@ int main(void)
   /* creation of spi1_mutex */
   spi1_mutexHandle = osMutexNew(&spi1_mutex_attributes);
 
+  /* creation of rtc_mutex */
+  rtc_mutexHandle = osMutexNew(&rtc_mutex_attributes);
+
   /* USER CODE BEGIN RTOS_MUTEX */
-  /* add mutexes, ... */
+  StmRtc_Begin(&hrtc, rtc_mutexHandle);
   /* USER CODE END RTOS_MUTEX */
 
   /* USER CODE BEGIN RTOS_SEMAPHORES */
@@ -536,6 +588,74 @@ static void MX_I2C1_Init(void)
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief RTC Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_RTC_Init(void)
+{
+
+  /* USER CODE BEGIN RTC_Init 0 */
+
+  /* USER CODE END RTC_Init 0 */
+
+  RTC_TimeTypeDef sTime = {0};
+  RTC_DateTypeDef sDate = {0};
+
+  /* USER CODE BEGIN RTC_Init 1 */
+
+  /* USER CODE END RTC_Init 1 */
+
+  /** Initialize RTC Only
+  */
+  hrtc.Instance = RTC;
+  hrtc.Init.HourFormat = RTC_HOURFORMAT_24;
+  hrtc.Init.AsynchPrediv = RTC_ASYNCH_PREDIV;
+  hrtc.Init.SynchPrediv = RTC_SYNCH_PREDIV;
+  hrtc.Init.OutPut = RTC_OUTPUT_DISABLE;
+  hrtc.Init.OutPutRemap = RTC_OUTPUT_REMAP_NONE;
+  hrtc.Init.OutPutPolarity = RTC_OUTPUT_POLARITY_HIGH;
+  hrtc.Init.OutPutType = RTC_OUTPUT_TYPE_OPENDRAIN;
+  if (HAL_RTC_Init(&hrtc) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /* USER CODE BEGIN Check_RTC_BKUP */
+  // The calendar survives a reset (the RTC runs on as long as VBAT has
+  // power): keep it. Year 00 leaves INITS clear, so the default below
+  // reads as "not set" (StmRtc_IsSet()) until GPS, network or DS1307 time.
+  if (__HAL_RTC_IS_CALENDAR_INITIALIZED(&hrtc))
+    return;
+  /* USER CODE END Check_RTC_BKUP */
+
+  /** Initialize RTC and set the Time and Date
+  */
+  sTime.Hours = 0x0;
+  sTime.Minutes = 0x0;
+  sTime.Seconds = 0x0;
+  sTime.DayLightSaving = RTC_DAYLIGHTSAVING_NONE;
+  sTime.StoreOperation = RTC_STOREOPERATION_RESET;
+  if (HAL_RTC_SetTime(&hrtc, &sTime, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sDate.WeekDay = RTC_WEEKDAY_SATURDAY;
+  sDate.Month = RTC_MONTH_JANUARY;
+  sDate.Date = 0x1;
+  sDate.Year = 0x0;
+
+  if (HAL_RTC_SetDate(&hrtc, &sDate, RTC_FORMAT_BCD) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN RTC_Init 2 */
+
+  /* USER CODE END RTC_Init 2 */
 
 }
 
@@ -723,8 +843,11 @@ extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
 /* USER CODE BEGIN Header_StartDisplayTask */
 /**
-  * @brief  Owns the DS1307 and the SSD1306: reads the clock, sets it from
-  *         GPS time, and redraws the display when the second changes.
+  * @brief  The clock task. Owns the DS1307 and the SSD1306 (neither driver
+  *         is locked) and sets the STM32 RTC: from GPS time when there is
+  *         a fix, else network time, else (after a power cycle) the DS1307.
+  *         The DS1307 is then set from the STM32 RTC. Tells the NTP server
+  *         where its time came from. Redraws when the second changes.
   * @param  argument: Not used
   * @retval None
   */
@@ -734,81 +857,131 @@ void StartDisplayTask(void *argument)
   /* USER CODE BEGIN 5 */
   // Built here, not as globals: the transports need i2c1_mutex, which only
   // exists once main() has created it. Static, to keep them (the SSD1306's
-  // 1 KB frame buffer above all) off this task's stack. Neither driver is
-  // locked, so this one thread calls everything on them.
-  DS1307::ds1307_param_t rtcParam;
-  rtcParam.period_ms = RTC_READ_PERIOD_MS;
-  static RtcClock rtc(rtcParam, &hi2c1, DS1307_ADDR, i2c1_mutexHandle);
+  // 1 KB frame buffer above all) off this task's stack.
+  DS1307::ds1307_param_t dsParam;
+  dsParam.period_ms = DS1307_READ_PERIOD_MS;
+  static Ds1307Clock ds1307(dsParam, &hi2c1, DS1307_ADDR, i2c1_mutexHandle);
   static OledDisplay oled(SSD1306::ssd1306_default_param(64), &hi2c1, SSD1306_I2C_ADDR, i2c1_mutexHandle);
 
-  char msg[160];
+  char msg[200];
   int lastSecond = -1;
-  bool lastRtcOk = true;
-  bool redrawPending = false;
-  bool rtcOk = false;
-  ClockTime now = {};
+  bool lastClockSet = false;
+  bool redrawPending = true;
   GpsStatus g = {};
+  ClockTime ds = {};             // the DS1307's last reading
+  bool dsOk = false;
 
-  uint32_t usedTimeSeq = 0;      // the GPS time last written, by its timeSeq
-  bool syncing = false;          // a setTime() is waiting to be written
-  ClockTime syncTime = {};
-  SyncSource syncingFrom = SyncSource::None;
-  SyncSource synced = SyncSource::None;
-  uint32_t lastSyncTick = 0;
-  ClockTime lastSync = {};
+  // Where the STM32 RTC's time came from, and when (UTC). A reset keeps
+  // both: the RTC runs on, and the backup registers hold the rest.
+  RtcSource source = RtcSource::None;
+  uint32_t lastSetUnix = 0;
+  uint32_t lastSetTick = 0;
+  bool ntpSynced = false;
+  if (StmRtc_LastSet(&source, &lastSetUnix)) {
+    uint32_t nowSec, frac;
+    const bool fresh = StmRtc_Read(&nowSec, &frac, 10) && nowSec - lastSetUnix < NTP_HOLDOVER_S;
+    if (fresh && source == RtcSource::Gps) {
+      ntpServer.setReference(1, NtpServer::refIdAscii("GPS"), NtpServer::fromUnix(lastSetUnix, 0), 0,
+                             GPS_ROOT_DISPERSION_US);
+      ntpSynced = true;
+    } else if (fresh && source == RtcSource::Network) {
+      ntpServer.setReference(NET_STRATUM, 0, NtpServer::fromUnix(lastSetUnix, 0), 0, NET_ROOT_DISPERSION_US);
+      ntpSynced = true;
+    }
+    // Due again RTC_RESYNC_INTERVAL_MS after the set, counted on this boot's tick
+    const uint32_t ageMs = fresh ? (nowSec - lastSetUnix) * 1000u : RTC_RESYNC_INTERVAL_MS;
+    lastSetTick = osKernelGetTickCount() - (ageMs < RTC_RESYNC_INTERVAL_MS ? ageMs : RTC_RESYNC_INTERVAL_MS);
+  }
+
+  uint32_t usedTimeSeq = 0;      // the GPS time last applied, by its timeSeq
+  bool dsCopyPending = false;    // write the DS1307 from the STM32 RTC at the next second
+  bool dsWriting = false;
   char ethLine[24] = "";
   char lastEthLine[24] = "";
 
   /* Infinite loop */
   for(;;)
   {
-    // Reads the DS1307 every RTC_READ_PERIOD_MS; sleeps (osDelay) until then
-    rtc.main(osKernelGetTickCount());
-
-    if (rtc.newData())
-      rtcOk = rtc.getTime(&now);
-    if (rtc.state() == DS1307::ds1307_err_state)
-      rtcOk = false;
+    // The DS1307: read once a second (sleeps in osDelay up to 100 ms here)
+    ds1307.main(osKernelGetTickCount());
+    if (ds1307.newData())
+      dsOk = ds1307.getTime(&ds);
+    if (ds1307.state() == DS1307::ds1307_err_state)
+      dsOk = false;
 
     osMutexAcquire(gps_data_mutexHandle, osWaitForever);
     g = gpsStatus;
     osMutexRelease(gps_data_mutexHandle);
 
-    // Set the DS1307 (UTC) when it has never been set, or once per interval:
-    // from the GPS when it has a fix, otherwise from network time (SNTP)
     const uint32_t tick = osKernelGetTickCount();
-    const bool syncDue = synced == SyncSource::None || (tick - lastSyncTick) >= RTC_RESYNC_INTERVAL_MS;
     xEthernet *eth = g_eth.load();
-    // A clock set from the network is set again from the GPS as soon as it has a fix
-    const bool gpsBetter = synced == SyncSource::Ntp;
-    if (!syncing && (syncDue || gpsBetter)) {
-      if (g.timeSeq != usedTimeSeq && (tick - g.timeTick) < GPS_TIME_MAX_AGE_MS) {
-        usedTimeSeq = g.timeSeq;
-        if (rtc.setTime(g.utc)) {
-          syncing = true;
-          syncingFrom = SyncSource::Gps;
-          syncTime = g.utc;
-        }
-      } else if (syncDue && !g.fix && eth != nullptr && eth->timeValid()) {
-        const uint64_t unixMs = eth->unixTimeMs();
-        if (unixMs % 1000 < NTP_SET_WINDOW_MS) {
-          ClockTime t;
-          DS1307::ds1307_from_unix((uint32_t)(unixMs / 1000), &t);
-          if (rtc.setTime(t)) {
-            syncing = true;
-            syncingFrom = SyncSource::Ntp;
-            syncTime = t;
-          }
-        }
+    const bool due = source == RtcSource::None || source == RtcSource::Ds1307
+                     || (tick - lastSetTick) >= RTC_RESYNC_INTERVAL_MS;
+
+    // 1. GPS time, when it is due, or when the clock came from anywhere else
+    if ((due || source != RtcSource::Gps) && g.timeSeq != usedTimeSeq && (tick - g.timeTick) < GPS_TIME_MAX_AGE_MS) {
+      usedTimeSeq = g.timeSeq;
+      // g.utc is the second the RMC named; time has moved on since it was parsed
+      const uint32_t ms = GPS_NMEA_DELAY_MS + (tick - g.timeTick);
+      const uint32_t unixSec = DS1307::ds1307_to_unix(g.utc) + ms / 1000;
+      const uint32_t frac = (uint32_t)(((uint64_t)(ms % 1000) << 32) / 1000);
+      if (StmRtc_Set(unixSec, frac, RtcSource::Gps)) {
+        ntpServer.setReference(1, NtpServer::refIdAscii("GPS"), NtpServer::fromUnix(unixSec, frac), 0,
+                               GPS_ROOT_DISPERSION_US);
+        ntpSynced = true;
+        source = RtcSource::Gps;
+        lastSetUnix = unixSec;
+        lastSetTick = tick;
+        dsCopyPending = true;
       }
     }
-    if (syncing && rtc.setStatus() == DS1307::ds1307_set_status_t::Done) {
-      syncing = false;
-      synced = syncingFrom;
-      lastSyncTick = tick;
-      lastSync = syncTime;
-    } else if (syncing && rtc.setStatus() == DS1307::ds1307_set_status_t::Failed) {
-      syncing = false;           // tried again with the next time
+    // 2. Network time (SNTP), when there is no GPS fix and the clock isn't GPS time still in holdover
+    else if (due && !g.fix && eth != nullptr && eth->timeValid()
+             && !(source == RtcSource::Gps && ntpSynced)) {
+      const uint64_t unixMs = eth->unixTimeMs();
+      const uint32_t unixSec = (uint32_t)(unixMs / 1000);
+      const uint32_t frac = (uint32_t)(((unixMs % 1000) << 32) / 1000);
+      if (StmRtc_Set(unixSec, frac, RtcSource::Network)) {
+        const IpAddress upstream = eth->address().ntp;
+        ntpServer.setReference(NET_STRATUM, upstream.isZero() ? 0 : NtpServer::refIdIp(upstream),
+                               NtpServer::fromUnix(unixSec, frac), 0, NET_ROOT_DISPERSION_US);
+        ntpSynced = true;
+        source = RtcSource::Network;
+        lastSetUnix = unixSec;
+        lastSetTick = tick;
+        dsCopyPending = true;
+      }
+    }
+    // 3. After a power cycle: the DS1307's time (whole seconds), until better comes
+    else if (!StmRtc_IsSet() && dsOk && ds1307.running()) {
+      if (StmRtc_Set(DS1307::ds1307_to_unix(ds), 0x80000000u, RtcSource::Ds1307))   // +0.5 s: its phase is unknown
+        source = RtcSource::Ds1307;
+    }
+
+    // The STM32 RTC is the clock from here on
+    uint32_t nowSec = 0, nowFrac = 0;
+    const bool clockSet = StmRtc_Read(&nowSec, &nowFrac, 10);
+    ClockTime now = {};
+    if (clockSet)
+      DS1307::ds1307_from_unix(nowSec, &now);
+
+    // Holdover: too long since GPS or network time
+    if (ntpSynced && clockSet && nowSec - lastSetUnix > NTP_HOLDOVER_S) {
+      ntpServer.setUnsynchronized();
+      ntpSynced = false;
+    }
+
+    // The DS1307 follows the STM32 RTC, written early in a second
+    if (dsCopyPending && clockSet && !dsWriting && nowFrac < (uint32_t)(((uint64_t)DS1307_SET_WINDOW_MS << 32) / 1000)) {
+      if (ds1307.setTime(now)) {
+        dsCopyPending = false;
+        dsWriting = true;
+      }
+    }
+    if (dsWriting && ds1307.setStatus() != DS1307::ds1307_set_status_t::Pending) {
+      if (ds1307.setStatus() == DS1307::ds1307_set_status_t::Failed)
+        dsCopyPending = true;    // try again at the next second
+      dsWriting = false;
     }
 
     formatEth(ethLine, sizeof(ethLine));
@@ -817,15 +990,21 @@ void StartDisplayTask(void *argument)
       redrawPending = true;
     }
 
-    if ((rtcOk && now.second != lastSecond) || rtcOk != lastRtcOk) {
-      lastSecond = rtcOk ? now.second : -1;
-      lastRtcOk = rtcOk;
+    if ((clockSet && now.second != lastSecond) || clockSet != lastClockSet) {
+      lastSecond = clockSet ? now.second : -1;
+      lastClockSet = clockSet;
       redrawPending = true;
 
-      snprintf(msg, sizeof(msg), "RTC %04u-%02u-%02u %02u:%02u:%02u UTC | GPS %s sats=%u cfg=%s | %s%s%s\r\n",
+      const NtpServer::Stats ns = ntpServer.stats();
+      snprintf(msg, sizeof(msg),
+               "RTC %04u-%02u-%02u %02u:%02u:%02u UTC (%s) | DS1307 %s | GPS %s sats=%u cfg=%s | %s | NTP %s req=%lu rep=%lu%s\r\n",
                now.year, now.month, now.day, now.hour, now.minute, now.second,
+               source == RtcSource::Gps ? "GPS" : source == RtcSource::Network ? "network"
+                 : source == RtcSource::Ds1307 ? "DS1307" : "not set",
+               !dsOk ? "not responding" : (ds1307.running() ? "ok" : "stopped"),
                !g.alive ? "no data" : (g.fix ? "fix" : "no fix"), g.satellites, configName(g.config), ethLine,
-               rtcOk ? "" : " | DS1307 not responding", oled.failed() ? " | SSD1306 not responding" : "");
+               ntpSynced ? "synced" : "unsynced", (unsigned long)ns.requests, (unsigned long)ns.replies,
+               oled.failed() ? " | SSD1306 not responding" : "");
       debugPrint(msg);
     }
 
@@ -833,7 +1012,9 @@ void StartDisplayTask(void *argument)
     // just the pages that changed.
     if (redrawPending && oled.idle()) {
       redrawPending = false;
-      drawScreen(oled, rtcOk, rtc.running(), now, g, ethLine, synced, lastSync);
+      ClockTime lastSet;
+      DS1307::ds1307_from_unix(lastSetUnix, &lastSet);
+      drawScreen(oled, clockSet, now, g, ethLine, source, lastSet, dsOk);
       oled.requestFlush();
     }
 
@@ -917,11 +1098,14 @@ void StartEthTask(void *argument)
   /* USER CODE BEGIN StartEthTask */
   const uint32_t uid = HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2();
 
-  // Two sockets for the application (0, 1) and the service socket (7,
-  // DHCP/DNS/SNTP); the W5500's other buffers are left unused.
+  // Two sockets for the application (0, 1), the NTP server (6, the UDP
+  // responder: UDP port 123) and the service socket (7, DHCP/DNS/SNTP
+  // client); the W5500's other buffers are left unused.
   W5500::w5500_param_t param;
   for (int i = 0; i < W5500::w5500_sockets; ++i)
-    param.rxBufKb[i] = param.txBufKb[i] = (i < 2 || i == W5500::w5500_service_socket) ? 2 : 0;
+    param.rxBufKb[i] = param.txBufKb[i] = (i < 2 || i >= 6) ? 2 : 0;
+  param.responder = &ntpServer;  // answers in this thread, from the STM32 RTC
+  param.responderPort = NtpServer::kPort;
   param.pollMs = 100;            // INTn is wired: polling is only a backstop
   param.seed = uid;
 

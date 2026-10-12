@@ -198,6 +198,8 @@ uint32_t w5500<TTransport>::step(uint32_t nowMs) {
 		if (_dhcpOn && !svcUsable()) return fail(nowMs);	// DHCP asked for, but no socket kept for it
 		_dhcp.stop();
 		_svcOpen = false;
+		_respOpen = false;
+		_respLen = 0;
 		_addrDirty = false;
 		if (_dhcpOn) {
 			_net = NetConfig();	// no address until the server gives one
@@ -417,7 +419,7 @@ uint32_t w5500<TTransport>::step(uint32_t nowMs) {
 		return xfer(true, w5500_bsb_sock_reg(_cur), w5500_Sn_TX_WR, _w, 2, St::tx_send, nowMs);
 	}
 	case St::tx_wrote:
-		if (_cur != w5500_service_socket || !_param.serviceSocket) _stTx.fetch_add(_moved, std::memory_order_relaxed);
+		_stTx.fetch_add(_moved, std::memory_order_relaxed);	// only TCP comes through here
 		_ptr = static_cast<uint16_t>(_ptr + _moved);
 		_fsr = static_cast<uint16_t>(_fsr - _moved);
 		_txWrote = static_cast<uint16_t>(_txWrote + _moved);
@@ -431,28 +433,33 @@ uint32_t w5500<TTransport>::step(uint32_t nowMs) {
 		enter(St::idle, nowMs);
 		return 0;
 
-	// ---- DHCP on socket 7 ----
+	// ---- UDP: the service socket (7: DHCP, DNS, SNTP) and the responder's ----
 	case St::svc_open_port:
-		putBe16(_w, DhcpClient::kClientPort);
-		return xfer(true, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_PORT, _w, 2, St::svc_open_cmd, nowMs);
+		putBe16(_w, isRespSocket(_udpSock) ? _param.responderPort : DhcpClient::kClientPort);
+		return xfer(true, w5500_bsb_sock_reg(_udpSock), w5500_Sn_PORT, _w, 2, St::svc_open_cmd, nowMs);
 	case St::svc_open_cmd:
-		return command(w5500_service_socket, w5500_CR_OPEN, St::svc_open_sr, nowMs);
+		return command(_udpSock, w5500_CR_OPEN, St::svc_open_sr, nowMs);
 	case St::svc_open_sr:
-		return xfer(false, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_SR, &_svc[1], 1, St::svc_open_check, nowMs);
+		return xfer(false, w5500_bsb_sock_reg(_udpSock), w5500_Sn_SR, &_svc[1], 1, St::svc_open_check, nowMs);
 	case St::svc_open_check:
 		if (_svc[1] != w5500_SOCK_UDP) return fail(nowMs);
+		if (isRespSocket(_udpSock)) {
+			_respOpen = true;
+			enter(St::idle, nowMs);
+			return 0;
+		}
 		_svcOpen = true;
 		_rand = _param.seed ^ (nowMs * 2654435761u);
 		if (_dhcpOn) _dhcp.begin(_cfg.mac, nextRand(), nowMs, _prevIp);
 		enter(St::idle, nowMs);
 		return 0;
 	case St::svc_rx_again:
-		return xfer(false, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_RX_RSR, _b, 2, St::svc_rx_check, nowMs);
+		return xfer(false, w5500_bsb_sock_reg(_udpSock), w5500_Sn_RX_RSR, _b, 2, St::svc_rx_check, nowMs);
 	case St::svc_rx_check: {
 		const uint16_t rsr = be16(_b);
 		if (be16(_a) != rsr) {
 			if (++_tries > 8) return fail(nowMs);
-			return xfer(false, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_RX_RSR, _a, 4, St::svc_rx_again, nowMs);
+			return xfer(false, w5500_bsb_sock_reg(_udpSock), w5500_Sn_RX_RSR, _a, 4, St::svc_rx_again, nowMs);
 		}
 		if (rsr < sizeof _udpHdr) {	// nothing (or nothing whole) to read
 			k.rxPending = false;
@@ -463,24 +470,36 @@ uint32_t w5500<TTransport>::step(uint32_t nowMs) {
 		_ptr = be16(_a + 2);
 		// Each datagram in a UDP socket's buffer starts with 8 bytes:
 		// source IP, source port, data length.
-		return xfer(false, w5500_bsb_sock_rx(w5500_service_socket), _ptr, _udpHdr, sizeof _udpHdr, St::svc_rx_hdr, nowMs);
+		return xfer(false, w5500_bsb_sock_rx(_udpSock), _ptr, _udpHdr, sizeof _udpHdr, St::svc_rx_hdr, nowMs);
 	}
 	case St::svc_rx_hdr: {
 		uint16_t len = be16(_udpHdr + 6);
 		if (len > _fsr - sizeof _udpHdr) len = static_cast<uint16_t>(_fsr - sizeof _udpHdr);
 		_udpLen = len;
 		_udpRead = len != 0 && len <= w5500_chunk_bytes;
-		if (!_udpRead) {	// too big for DHCP, DNS or SNTP: skip it
+		if (!_udpRead) {	// too big for DHCP, DNS, SNTP or the responder: skip it
 			enter(St::svc_rx_data, nowMs);
 			return 0;
 		}
 		_moved = len;
-		return xfer(false, w5500_bsb_sock_rx(w5500_service_socket), static_cast<uint16_t>(_ptr + sizeof _udpHdr),
+		return xfer(false, w5500_bsb_sock_rx(_udpSock), static_cast<uint16_t>(_ptr + sizeof _udpHdr),
 		            _chunk, len, St::svc_rx_data, nowMs);
 	}
 	case St::svc_rx_data:
-		// Which client a datagram is for: the port it came from.
-		if (_udpRead) {
+		if (_udpRead && isRespSocket(_udpSock)) {
+			// The responder: it answers now, into _chunk; the reply goes
+			// out as soon as the chip has let go of the request.
+			const IpAddress from(_udpHdr[0], _udpHdr[1], _udpHdr[2], _udpHdr[3]);
+			const uint16_t fromPort = be16(_udpHdr + 4);
+			_stUdpReq.fetch_add(1, std::memory_order_relaxed);
+			const size_t n = _param.responder->respond(from, fromPort, _chunk, _udpLen, w5500_chunk_bytes, nowMs);
+			if (n != 0 && n <= w5500_chunk_bytes && !from.isZero() && fromPort != 0) {
+				_respLen = static_cast<uint16_t>(n);
+				_respDst = from;
+				_respPort = fromPort;
+			}
+		} else if (_udpRead) {
+			// Which client a datagram is for: the port it came from.
 			switch (be16(_udpHdr + 4)) {
 			case DhcpClient::kServerPort:
 				if (_dhcpOn) dhcpEvent(_dhcp.receive(_chunk, _udpLen, nowMs).event);
@@ -498,18 +517,28 @@ uint32_t w5500<TTransport>::step(uint32_t nowMs) {
 		}
 		_ptr = static_cast<uint16_t>(_ptr + sizeof _udpHdr + _udpLen);
 		putBe16(_w, _ptr);
-		return xfer(true, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_RX_RD, _w, 2, St::svc_rx_recv, nowMs);
+		return xfer(true, w5500_bsb_sock_reg(_udpSock), w5500_Sn_RX_RD, _w, 2, St::svc_rx_recv, nowMs);
 	case St::svc_rx_recv:
-		return command(w5500_service_socket, w5500_CR_RECV, St::idle, nowMs);	// rxPending stays set until RSR reads 0
+		return command(_udpSock, w5500_CR_RECV, St::svc_rx_done, nowMs);	// rxPending stays set until RSR reads 0
+	case St::svc_rx_done:
+		if (_respLen != 0 && isRespSocket(_udpSock)) {
+			// Before anything else can use _chunk.
+			const uint16_t n = _respLen;
+			_respLen = 0;
+			_stUdpRep.fetch_add(1, std::memory_order_relaxed);
+			return sendUdp(_udpSock, _respDst, _respPort, n, nowMs);
+		}
+		enter(St::idle, nowMs);
+		return 0;
 	case St::svc_tx_ptr:
-		return xfer(false, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_TX_WR, _b, 2, St::svc_tx_data, nowMs);
+		return xfer(false, w5500_bsb_sock_reg(_udpSock), w5500_Sn_TX_WR, _b, 2, St::svc_tx_data, nowMs);
 	case St::svc_tx_data:
 		_ptr = be16(_b);
-		return xfer(true, w5500_bsb_sock_tx(w5500_service_socket), _ptr, _chunk, _moved, St::svc_tx_wr, nowMs);
+		return xfer(true, w5500_bsb_sock_tx(_udpSock), _ptr, _chunk, _moved, St::svc_tx_wr, nowMs);
 	case St::svc_tx_wr:
 		_ptr = static_cast<uint16_t>(_ptr + _moved);
 		putBe16(_w, _ptr);
-		return xfer(true, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_TX_WR, _w, 2, St::tx_send, nowMs);	// then SEND, as for TCP
+		return xfer(true, w5500_bsb_sock_reg(_udpSock), w5500_Sn_TX_WR, _w, 2, St::tx_send, nowMs);	// then SEND, as for TCP
 
 	case St::error:
 		// A transfer given up on may still be in flight; it has to land
@@ -578,7 +607,8 @@ uint32_t w5500<TTransport>::schedule(uint32_t nowMs) {
 			return command(s, w5500_CR_CLOSE, St::idle, nowMs);
 		}
 		if (k.sendInFlight && after(nowMs, k.sendSince, w5500_send_timeout_ms)) {
-			if (_param.serviceSocket && s == w5500_service_socket) {	// a lost datagram: the client's own retry covers it
+			if ((_param.serviceSocket && s == w5500_service_socket) || isRespSocket(s)) {
+				// A lost datagram: the client's own retry covers it.
 				k.sendInFlight = false;
 				continue;
 			}
@@ -592,6 +622,12 @@ uint32_t w5500<TTransport>::schedule(uint32_t nowMs) {
 	// 3b. The service socket: the address, DHCP, DNS and SNTP.
 	if (_addrDirty || svcUsable()) {
 		const uint32_t w = serviceStep(nowMs);
+		if (w == 0) return 0;
+	}
+
+	// 3c. The UDP responder's socket.
+	if (respUsable()) {
+		const uint32_t w = responderStep(nowMs);
 		if (w == 0) return 0;
 	}
 
@@ -782,6 +818,8 @@ uint32_t w5500<TTransport>::fail(uint32_t nowMs) {
 	_ready = false;
 	_dhcp.stop();
 	_svcOpen = false;
+	_respOpen = false;
+	_respLen = 0;
 	_addrDirty = false;
 	failQueries();
 	if (!_net.ip.isZero()) {
@@ -864,6 +902,7 @@ uint32_t w5500<TTransport>::serviceStep(uint32_t nowMs) {
 	}
 	Sock &k = _sock[w5500_service_socket];
 	_cur = w5500_service_socket;
+	_udpSock = w5500_service_socket;
 	if (!_svcOpen) {
 		k = Sock();
 		_w[0] = w5500_Sn_MR_UDP;
@@ -915,13 +954,35 @@ uint32_t w5500<TTransport>::serviceStep(uint32_t nowMs) {
 	return _addrDirty ? 0 : 1;	// a Lost with nothing to send: apply it on the next pass
 }
 
-// _chunk[0..len) to dst:port from the service socket.
+// The UDP responder's socket: open it, then read requests one at a time,
+// each answered before the next is read. Returns 0 having started
+// something, non-zero if there was nothing.
 template <typename TTransport>
-uint32_t w5500<TTransport>::sendService(const IpAddress &dst, uint16_t port, size_t len, uint32_t nowMs) {
+uint32_t w5500<TTransport>::responderStep(uint32_t nowMs) {
+	const uint8_t s = respSocket();
+	Sock &k = _sock[s];
+	if (!_respOpen) {
+		k = Sock();
+		_cur = _udpSock = s;
+		_w[0] = w5500_Sn_MR_UDP;
+		return xfer(true, w5500_bsb_sock_reg(s), w5500_Sn_MR, _w, 1, St::svc_open_port, nowMs);
+	}
+	if (k.rxPending && !k.sendInFlight) {	// the last reply has gone: the next request
+		_cur = _udpSock = s;
+		_tries = 0;
+		return xfer(false, w5500_bsb_sock_reg(s), w5500_Sn_RX_RSR, _a, 4, St::svc_rx_again, nowMs);
+	}
+	return 1;
+}
+
+// _chunk[0..len) to dst:port from UDP socket s.
+template <typename TTransport>
+uint32_t w5500<TTransport>::sendUdp(uint8_t s, const IpAddress &dst, uint16_t port, size_t len, uint32_t nowMs) {
+	_cur = _udpSock = s;
 	_moved = static_cast<uint16_t>(len);
 	for (int i = 0; i < 4; ++i) _w[i] = dst.b[i];
 	putBe16(_w + 4, port);
-	return xfer(true, w5500_bsb_sock_reg(w5500_service_socket), w5500_Sn_DIPR, _w, 6, St::svc_tx_ptr, nowMs);
+	return xfer(true, w5500_bsb_sock_reg(s), w5500_Sn_DIPR, _w, 6, St::svc_tx_ptr, nowMs);
 }
 
 template <typename TTransport>

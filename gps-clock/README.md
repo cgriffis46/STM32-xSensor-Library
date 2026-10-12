@@ -8,20 +8,33 @@ STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combine
 | SSD1306 128x64 OLED | `iDisplay/ssd1306`: `xssd1306<Stm32HalI2CTransport>` | I2C1, address 0x3C |
 | MTK3333 GPS (e.g. CDtop PA1616D, Quectel L80/L86) | `isensor/mtk3339`: `xmtk3339<Stm32HalUartTransport>` | USART1, 9600 baud |
 | W5500 Ethernet (WIZ850io, W5500-Lite, ...) | `iNetTransport/w5500`: `w5500<Stm32HalSpiBlockTransport>` behind `xEthernet` | SPI1 with DMA, 10 MHz |
+| NTP server | `iNetTransport/sntp`: `NtpServer`, on the W5500's UDP responder (socket 6) | UDP port 123 |
+| STM32 RTC | `Core/Src/stm32_rtc.cpp` | LSE, PREDIV 7/4095 |
 
-All four drivers are the non-blocking ones from
+The drivers are the non-blocking ones from
 [Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport), copied into
 the project unchanged (`iTransport/`, `isensor/`, `iDisplay/`; the commits are in
-`iTransport/SOURCE.txt`). The ds1307 driver was written for this example and is on
-Claude-iTransport's `claude/ds1307-driver` branch, not yet merged there. The
+`iTransport/SOURCE.txt`). Written for this example and not yet merged into
+Claude-iTransport's main: the ds1307 driver (branch `claude/ds1307-driver`), and
+the W5500's UDP responder and `NtpServer` (branch `claude/w5500-udp-responder`). The
 mtk3339 driver is written for the MT3339; the MT3333 uses the same NMEA and PMTK
 commands.
 
-The DS1307 time is shown on the SSD1306 once a second. Once the GPS has a valid fix,
-the DS1307 is set from GPS time (UTC), then re-synced every hour. The W5500 gets an
-address by DHCP (shown on the display) and keeps network time by SNTP
-(`pool.ntp.org`, or the server DHCP names); when the GPS has no fix, that time
-sets the DS1307 instead.
+Time flows GPS -> STM32 RTC -> DS1307, and the NTP server serves the STM32 RTC:
+
+* Once the GPS has a fix, its UTC time is applied to the STM32L432's own RTC (on
+  the LSE crystal, 1/4096 s resolution) to a fraction of a second, then copied to
+  the DS1307 at the start of the next second. Re-synced every hour.
+* The display shows the STM32 RTC.
+* The W5500 gets an address by DHCP (shown on the display) and answers NTP
+  requests on UDP port 123 from the STM32 RTC: stratum 1, reference `GPS`.
+* Without a GPS fix, network time (SNTP from `pool.ntp.org`, or the server DHCP
+  names) sets both RTCs instead, and the NTP server says stratum 3. A clock set
+  from the network is set again from the GPS as soon as there is a fix.
+* After a power cycle the STM32 RTC starts empty (on the Nucleo, VBAT is tied to
+  VDD) and is seeded from the battery-backed DS1307; the NTP server says "not
+  synchronised" until GPS or network time arrives. A reset keeps the RTC and,
+  in backup registers, where its time came from.
 
 The system clock is 80 MHz (MSI + PLL, trimmed by the LSE crystal).
 
@@ -65,6 +78,9 @@ IP 192.168.1.77
 RTC synced 12:30Z GPS
 ```
 
+The last line says where the STM32 RTC's time came from: `GPS`, `NTP` (network),
+`RTC from DS1307`, or `RTC not set`.
+
 The DS1307 is kept in UTC. To show local time, set `UTC_OFFSET_MINUTES` in
 `Core/Src/main.cpp` (fixed offset, no daylight saving).
 
@@ -90,15 +106,37 @@ The DS1307 is kept in UTC. To show local time, set `UTC_OFFSET_MINUTES` in
   sockets 0 and 1 are left for the application (`xClient`). INTn wakes it at once
   through `HAL_GPIO_EXTI_Callback` -> `interruptFromIsr()`.
 
-`displayTask` shows the address (or `ETH: no link` / `waiting for DHCP` /
-`no W5500`) and, when the GPS has no fix, sets the DS1307 from
-`eth.unixTimeMs()`, only in the first 150 ms of a second since writing the seconds
-register restarts the DS1307's 1 Hz divider. The status line says which source
-set the clock (`GPS` or `NTP`). A clock set from NTP is set again from the GPS
-as soon as the GPS has a fix.
+`displayTask` is the clock task. It owns the DS1307 and the SSD1306, and sets
+the STM32 RTC:
+
+1. **GPS** (when due, or whenever the clock came from anywhere else): the RMC's
+   second, plus the time since the sentence was parsed and `GPS_NMEA_DELAY_MS`.
+   `StmRtc_Set()` writes the date and time in one init-mode session (the second
+   starts as it ends), then moves the RTC forward by the fraction with a
+   sub-second shift (`RTC_SHIFTR`). The NTP server is told: stratum 1, `GPS`,
+   root dispersion 100 ms (NMEA timing without PPS).
+2. **Network time**, when the GPS has no fix (and the clock isn't GPS time still
+   within 24 h of holdover): `eth.unixTimeMs()`, to the ms. Stratum 3.
+3. **The DS1307**, only when the STM32 RTC is empty after a power cycle. Its
+   phase within the second is unknown, so it's set to the middle of the second;
+   NTP stays "not synchronised".
+
+After 1 or 2 the DS1307 is written from the STM32 RTC in the first 100 ms of a
+second. After 24 h without GPS or network time the NTP server goes back to "not
+synchronised".
+
+The NTP server (`NtpServer`) runs in `ethTask`: the W5500 driver hands it each
+request on socket 6 as it is read, it reads the STM32 RTC (receive timestamp,
+then again for the transmit timestamp) and the reply goes straight back. Only
+client requests (mode 3, NTP v1-v4) are answered; control and private modes
+(`ntpq`, `monlist`) get nothing. The debug UART line shows its request and reply
+counts. Test it from a PC with `ntpdate -q <board IP>`, `sntp <board IP>` or
+`chronyc`/`ntpq` pointed at it.
 
 The DS1307 and SSD1306 transports share I2C1 and `i2c1_mutex`; each holds it
-for one transfer at a time. The W5500 has SPI1 and `spi1_mutex` to itself.
+for one transfer at a time. The W5500 has SPI1 and `spi1_mutex` to itself. The
+STM32 RTC is read and set under `rtc_mutex` (the NTP server waits at most 2 ms
+for it, then drops the request; the client asks again).
 
 Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`.
 
@@ -116,18 +154,27 @@ Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`
   `i2c1_mutex`/`spi1_mutex` have been created and the peripherals initialised.
 * SPI1_RX on DMA1 channel 2 and SPI1_TX on DMA1 channel 3 (request 1, normal
   mode, bytes): the W5500 moves up to 1 KB per transfer.
-* The FreeRTOS heap is 24 KB: the interface's queue, event groups and stream
-  buffers (2 sockets x 2 x 1 KB) come from it.
+* The FreeRTOS heap is 26 KB: the task stacks and the interface's queue, event
+  groups and stream buffers (2 sockets x 2 x 1 KB) come from it.
+* W5500 socket buffers: 2 KB each way for sockets 0, 1 (application), 6 (NTP)
+  and 7 (DHCP/DNS/SNTP client).
 
 ## Not verified
 
 * Not run on hardware yet; only built with arm-none-eabi-gcc 13 using the
-  CubeIDE flags (126 KB flash at -O0, 69 KB at -Os; 38.7 KB RAM). The drivers' own
+  CubeIDE flags (137 KB flash at -O0, 74 KB at -Os; 40.9 KB RAM). The drivers' own
   host tests (`ds1307_test`, `mtk3339_test`, `nmea_parser_test`, `ssd1306_test`,
-  `W5500_test`, `DhcpClient_test`, `DnsClient_test`, `SntpClient_test`, `xNet_test`)
-  pass at the vendored commits.
-* The .ioc was edited by hand for SPI1, DMA, the W5500 pins, the 80 MHz clock and
-  the third task. Open it in CubeMX and check it before generating code over
+  `W5500_test` with the UDP responder cases, `NtpServer_test`, `DhcpClient_test`,
+  `DnsClient_test`, `SntpClient_test`, `xNet_test`) pass at the vendored commits,
+  and `test/stm32_rtc_math_test.cpp` (the RTC register arithmetic and the
+  sub-second shift, against a model of the RTC from RM0394) passes on a PC.
+* NTP accuracy is limited by the GPS's NMEA timing: the RMC sentence arrives some
+  100-500 ms after the second it names, depending on the module and baud rate.
+  Set `GPS_NMEA_DELAY_MS` once measured. Wiring the module's PPS output to a
+  timer input capture would bring the RTC to within a few hundred microseconds;
+  that's not done here.
+* The .ioc was edited by hand for SPI1, DMA, the W5500 pins, the 80 MHz clock,
+  the RTC (LSE, PREDIV 7/4095), `rtc_mutex` and the third task. Open it in CubeMX and check it before generating code over
   this project.
 * The clock setup expects the LSE crystal (X2, fitted on the NUCLEO-L432KC).
   Without it `SystemClock_Config()` stops in `Error_Handler()`.

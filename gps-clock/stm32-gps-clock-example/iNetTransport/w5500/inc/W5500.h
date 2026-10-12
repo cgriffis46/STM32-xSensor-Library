@@ -31,6 +31,12 @@
  *  socket on port 68 for DHCP, DNS and SNTP (iNetTransport/dhcp,
  *  dns, sntp: pure-logic clients this driver runs), told apart by the
  *  peer's port (67, 53, 123), and the interface gets sockets 0..6.
+ *
+ *  With w5500_param_t::responder and responderPort set, one more socket
+ *  (6 with the service socket, else 7) is a UDP server on that port:
+ *  each request is handed to the responder (iNetTransport/inc/
+ *  iUdpResponder.h) as it is read, and its reply sent straight back to
+ *  where the request came from. The interface then gets one socket fewer.
  */
 
 #ifndef W5500_H_
@@ -43,6 +49,7 @@
 #include <utility>
 #include "iBlockTransport.h"
 #include "iNetDevice.h"
+#include "iUdpResponder.h"
 #include "W5500Regs.h"
 #include "DhcpClient.h"
 #include "DnsClient.h"
@@ -91,6 +98,15 @@ typedef struct w5500_param_t {
 	// give the interface all 8 sockets, with a static address and no
 	// name lookups or time.
 	bool     serviceSocket = true;
+	// A UDP server on responderPort (an NTP server on 123, say), in the
+	// socket below the service socket (6; 7 without the service socket).
+	// Both must be set, and that socket needs at least 1 KB each way in
+	// rxBufKb/txBufKb; the interface then gets one socket fewer. The
+	// responder must outlive the driver; it is called in the driver
+	// thread (see iUdpResponder.h). One reply at a time: a request that
+	// arrives while the last reply is still going out waits on the chip.
+	iUdpResponder *responder = nullptr;
+	uint16_t       responderPort = 0;
 	// Mixed into DHCP transaction IDs, DNS query IDs and SNTP nonces,
 	// so devices booting together don't collide and answers are hard
 	// to forge: e.g. HAL_GetUIDw0() ^ HAL_GetUIDw1() ^ HAL_GetUIDw2().
@@ -106,6 +122,8 @@ typedef struct w5500_stats_t {
 	uint32_t interrupts;	// INT pin events relayed by the host
 	uint32_t rxBytes;		// TCP payload, chip -> host
 	uint32_t txBytes;		// TCP payload, host -> chip
+	uint32_t udpRequests;	// datagrams handed to the UDP responder
+	uint32_t udpReplies;	// replies it sent
 } w5500_stats_t;
 
 enum class w5500_state_t : uint8_t {
@@ -147,7 +165,7 @@ enum class w5500_state_t : uint8_t {
 	tx_wrote,
 	tx_send,
 	tx_sent,
-	svc_open_port,		// the service socket: UDP, port 68
+	svc_open_port,		// a UDP socket (_udpSock): the service socket on port 68, or the responder's
 	svc_open_cmd,
 	svc_open_sr,
 	svc_open_check,
@@ -156,6 +174,7 @@ enum class w5500_state_t : uint8_t {
 	svc_rx_hdr,
 	svc_rx_data,
 	svc_rx_recv,
+	svc_rx_done,		// the responder's reply, if it gave one, goes out now
 	svc_tx_ptr,			// a datagram: Sn_DIPR/DPORT written, now Sn_TX_WR
 	svc_tx_data,
 	svc_tx_wr,
@@ -177,7 +196,10 @@ public:
 
 	// iNetDevice
 	void attach(iNetDeviceHost &host) override { _host = &host; }
-	uint8_t socketCount() const override { return _param.serviceSocket ? w5500_service_socket : w5500_sockets; }
+	uint8_t socketCount() const override {
+		if (respUsable()) return respSocket();
+		return _param.serviceSocket ? w5500_service_socket : w5500_sockets;
+	}
 	void configure(const NetConfig &cfg) override;
 	uint32_t poll(uint32_t nowMs) override;
 	bool connect(uint8_t s, const IpAddress &ip, uint16_t port, uint16_t localPort) override;
@@ -206,6 +228,8 @@ public:
 		s.interrupts = _stInterrupts.load(std::memory_order_relaxed);
 		s.rxBytes = _stRx.load(std::memory_order_relaxed);
 		s.txBytes = _stTx.load(std::memory_order_relaxed);
+		s.udpRequests = _stUdpReq.load(std::memory_order_relaxed);
+		s.udpReplies = _stUdpRep.load(std::memory_order_relaxed);
 		return s;
 	}
 
@@ -261,8 +285,24 @@ private:
 		return _param.serviceSocket && _param.rxBufKb[w5500_service_socket] != 0
 		       && _param.txBufKb[w5500_service_socket] != 0;
 	}
+	// The UDP responder's socket, and whether it is set up to be used.
+	uint8_t respSocket() const {
+		return static_cast<uint8_t>(_param.serviceSocket ? w5500_service_socket - 1 : w5500_sockets - 1);
+	}
+	bool respUsable() const {
+		return _param.responder != nullptr && _param.responderPort != 0
+		       && _param.rxBufKb[respSocket()] != 0 && _param.txBufKb[respSocket()] != 0;
+	}
+	// Without the service socket the responder has socket 7, and the
+	// service code never runs; so this alone tells the two apart.
+	bool isRespSocket(uint8_t s) const { return respUsable() && s == respSocket(); }
 	uint32_t serviceStep(uint32_t nowMs);
-	uint32_t sendService(const IpAddress &dst, uint16_t port, size_t len, uint32_t nowMs);
+	uint32_t responderStep(uint32_t nowMs);
+	// _chunk[0..len) to dst:port from UDP socket s (the service socket or the responder's).
+	uint32_t sendUdp(uint8_t s, const IpAddress &dst, uint16_t port, size_t len, uint32_t nowMs);
+	uint32_t sendService(const IpAddress &dst, uint16_t port, size_t len, uint32_t nowMs) {
+		return sendUdp(w5500_service_socket, dst, port, len, nowMs);
+	}
 	uint32_t nextRand() { _rand = _rand * 1664525u + 1013904223u; return _rand; }
 	bool bufConfigValid() const;
 
@@ -287,6 +327,11 @@ private:
 	bool            _dhcpOn = false;	// this configuration uses DHCP
 	bool            _svcOpen = false;	// socket 7 open in UDP mode
 	bool            _addrDirty = false;	// _net changed: write it to the chip and report it
+	bool            _respOpen = false;	// the responder's socket open in UDP mode
+	uint8_t         _udpSock = w5500_service_socket;	// the UDP socket the svc_* states are working on
+	uint16_t        _respLen = 0;		// the responder's reply in _chunk, waiting to go out
+	IpAddress       _respDst;			// and where to
+	uint16_t        _respPort = 0;
 
 	// DNS and SNTP, over the service socket.
 	DnsClient       _dns;				// resolve()
@@ -352,6 +397,7 @@ private:
 	uint8_t  _chunk[w5500_chunk_bytes];	// payload to or from the chip's buffers
 
 	std::atomic<uint32_t> _stTransfers{0}, _stFailures{0}, _stInits{0}, _stInterrupts{0}, _stRx{0}, _stTx{0};
+	std::atomic<uint32_t> _stUdpReq{0}, _stUdpRep{0};
 };
 
 } /* namespace W5500 */
