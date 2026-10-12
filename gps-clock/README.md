@@ -10,13 +10,14 @@ STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combine
 | W5500 Ethernet (WIZ850io, W5500-Lite, ...) | `iNetTransport/w5500`: `w5500<Stm32HalSpiBlockTransport>` behind `xEthernet` | SPI1 with DMA, 10 MHz |
 | NTP server | `iNetTransport/sntp`: `NtpServer`, on the W5500's UDP responder (socket 6) | UDP port 123 |
 | STM32 RTC | `Core/Src/stm32_rtc.cpp` | LSE, PREDIV 7/4095 |
+| GPS PPS (optional) | `Core/Inc/pps_math.h`, TIM2 input capture | PA0 (A0) |
 
 The drivers are the non-blocking ones from
 [Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport), copied into
 the project unchanged (`iTransport/`, `isensor/`, `iDisplay/`; the commits are in
-`iTransport/SOURCE.txt`). Written for this example and not yet merged into
-Claude-iTransport's main: the ds1307 driver (branch `claude/ds1307-driver`), and
-the W5500's UDP responder and `NtpServer` (branch `claude/w5500-udp-responder`). The
+`iTransport/SOURCE.txt`). Written for this example and in review in
+Claude-iTransport ([cgriffis46/Claude-iTransport#34](https://github.com/cgriffis46/Claude-iTransport/pull/34)):
+the ds1307 driver, and the W5500's UDP responder and `NtpServer`. The
 mtk3339 driver is written for the MT3339; the MT3333 uses the same NMEA and PMTK
 commands.
 
@@ -31,6 +32,9 @@ Time flows GPS -> STM32 RTC -> DS1307, and the NTP server serves the STM32 RTC:
 * Without a GPS fix, network time (SNTP from `pool.ntp.org`, or the server DHCP
   names) sets both RTCs instead, and the NTP server says stratum 3. A clock set
   from the network is set again from the GPS as soon as there is a fix.
+* With the GPS's PPS wired to PA0, the STM32 RTC is disciplined to it (see
+  "PPS" below): within about half a millisecond, and the NTP server says
+  stratum 1, reference `PPS`, 1 ms dispersion. NMEA timing is the fallback.
 * After a power cycle the STM32 RTC starts empty (on the Nucleo, VBAT is tied to
   VDD) and is seeded from the battery-backed DS1307; the NTP server says "not
   synchronised" until GPS or network time arrives. A reset keeps the RTC and,
@@ -54,6 +58,7 @@ The system clock is 80 MHz (MSI + PLL, trimmed by the LSE crystal).
 | GPIO out | PA4 | A3 | W5500 SCSn |
 | GPIO out | PA3 | A2 | W5500 RSTn |
 | EXTI1 | PA1 | A1 | W5500 INTn (pulled up; optional, the driver polls without it) |
+| TIM2_CH1 | PA0 | A0 | GPS PPS / 1PPS / FIX output (optional; pulled down; 3.3 V logic) |
 | 3V3, GND | | | W5500 3.3 V (about 130 mA) and GND |
 
 * I2C needs pull-ups to 3.3 V (most DS1307 and SSD1306 breakouts already have them).
@@ -125,6 +130,41 @@ After 1 or 2 the DS1307 is written from the STM32 RTC in the first 100 ms of a
 second. After 24 h without GPS or network time the NTP server goes back to "not
 synchronised".
 
+### PPS
+
+Most GPS modules have a pulse-per-second output whose rising edge starts each
+UTC second, to well under a microsecond; the RMC sentence that follows names
+that second (general MTK behaviour, not checked against the module's datasheet:
+the debug line's `nmea=` shows the gap, which should be 100-900 ms). Many MTK3333
+modules only pulse once they have a fix. On some breakouts the pin is labelled
+`1PPS`, `PPS` or `FIX`.
+
+* TIM2 runs free at 1 MHz (32-bit) and latches each edge in hardware (input
+  capture on PA0), so interrupt latency doesn't matter. The last four edges are
+  kept.
+* Each RMC (timestamped with TIM2 as it is parsed) is paired with the edge just
+  before it, within a second; that edge must itself be a second after the one
+  before, so a lone or glitched edge is ignored.
+* The clock task reads the STM32 RTC and TIM2 together (interrupts masked) and
+  works out the RTC's error against the edge. `ppsmath::Discipline` then:
+  * sets the RTC outright if it is 200 ms or more off (at start-up);
+  * shifts it (`RTC_SHIFTR`) when it is more than 400 us off;
+  * every 1024 s, measures the drift (corrections taken out) and adjusts the
+    RTC's smooth calibration (`RTC_CALR`, 0.95 ppm steps) to cancel it. The
+    calibration survives a reset.
+* While locked (under 1 ms), every edge renews the NTP server's reference:
+  stratum 1, `PPS`, root dispersion 1 ms. The DS1307 is written hourly.
+* No paired edge for 3 s: back to NMEA timing, and the RTC holds the time and
+  calibration it was locked to. The NTP server's dispersion grows by 20 ppm
+  from the last edge.
+
+`test/pps_math_test.cpp` (on a PC) runs the loop against a simulated RTC whose
+crystal is off by -48 to +23 ppm: after six hours each is within 0.5 ppm, and the
+phase within 0.54 ms. The display's last line reads `PPS lock -23.8ppm` (the
+calibration) while locked; the debug line shows the error, calibration and NMEA
+delay every second. Measure that NMEA delay with PPS, then put it in
+`GPS_NMEA_DELAY_MS` for when PPS is absent.
+
 The NTP server (`NtpServer`) runs in `ethTask`: the W5500 driver hands it each
 request on socket 6 as it is read, it reads the STM32 RTC (receive timestamp,
 then again for the transmit timestamp) and the reply goes straight back. Only
@@ -154,7 +194,7 @@ Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`
   `i2c1_mutex`/`spi1_mutex` have been created and the peripherals initialised.
 * SPI1_RX on DMA1 channel 2 and SPI1_TX on DMA1 channel 3 (request 1, normal
   mode, bytes): the W5500 moves up to 1 KB per transfer.
-* The FreeRTOS heap is 26 KB: the task stacks and the interface's queue, event
+* The FreeRTOS heap is 28 KB: the task stacks and the interface's queue, event
   groups and stream buffers (2 sockets x 2 x 1 KB) come from it.
 * W5500 socket buffers: 2 KB each way for sockets 0, 1 (application), 6 (NTP)
   and 7 (DHCP/DNS/SNTP client).
@@ -162,19 +202,22 @@ Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`
 ## Not verified
 
 * Not run on hardware yet; only built with arm-none-eabi-gcc 13 using the
-  CubeIDE flags (137 KB flash at -O0, 74 KB at -Os; 40.9 KB RAM). The drivers' own
+  CubeIDE flags (146 KB flash at -O0, 78 KB at -Os; 43 KB RAM). The drivers' own
   host tests (`ds1307_test`, `mtk3339_test`, `nmea_parser_test`, `ssd1306_test`,
   `W5500_test` with the UDP responder cases, `NtpServer_test`, `DhcpClient_test`,
   `DnsClient_test`, `SntpClient_test`, `xNet_test`) pass at the vendored commits,
-  and `test/stm32_rtc_math_test.cpp` (the RTC register arithmetic and the
-  sub-second shift, against a model of the RTC from RM0394) passes on a PC.
-* NTP accuracy is limited by the GPS's NMEA timing: the RMC sentence arrives some
-  100-500 ms after the second it names, depending on the module and baud rate.
-  Set `GPS_NMEA_DELAY_MS` once measured. Wiring the module's PPS output to a
-  timer input capture would bring the RTC to within a few hundred microseconds;
-  that's not done here.
+  and on a PC `test/stm32_rtc_math_test.cpp` (the RTC register arithmetic and the
+  sub-second shift, against a model of the RTC from RM0394) and
+  `test/pps_math_test.cpp` (pairing, error, shift and calibration registers, and
+  the PPS loop against a drifting simulated RTC) pass.
+* Without PPS, NTP accuracy is limited by the GPS's NMEA timing: the RMC sentence
+  arrives some 100-500 ms after the second it names, depending on the module and
+  baud rate. Set `GPS_NMEA_DELAY_MS` (measure it with PPS: `nmea=` in the debug
+  line). With PPS the limit is the RTC's 244 us step and the loop's 400 us band.
+* The PPS pin and its pairing with RMC haven't been tried on a module.
 * The .ioc was edited by hand for SPI1, DMA, the W5500 pins, the 80 MHz clock,
-  the RTC (LSE, PREDIV 7/4095), `rtc_mutex` and the third task. Open it in CubeMX and check it before generating code over
+  the RTC (LSE, PREDIV 7/4095), `rtc_mutex`, TIM2 input capture on PA0 and the
+  third task. Open it in CubeMX and check it before generating code over
   this project.
 * The clock setup expects the LSE crystal (X2, fitted on the NUCLEO-L432KC).
   Without it `SystemClock_Config()` stops in `Error_Handler()`.

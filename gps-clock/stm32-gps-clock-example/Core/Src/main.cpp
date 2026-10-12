@@ -15,6 +15,11 @@
   *  from the STM32 RTC. Without a GPS fix, network time (SNTP) sets the
   *  RTCs instead; after a power cycle the DS1307 seeds the STM32 RTC.
   *
+  *  With the GPS's PPS output wired to PA0, TIM2 latches each second's edge
+  *  in hardware and the STM32 RTC is disciplined to it: phase by sub-second
+  *  shifts, frequency by the RTC's smooth calibration (Core/Inc/pps_math.h).
+  *  NMEA timing (to about 100-500 ms) is then only the fallback.
+  *
   *  All four use the non-blocking drivers from Claude-iTransport
   *  (see iTransport/SOURCE.txt):
   *    xds1307<Stm32HalI2CTransport>    isensor/ds1307
@@ -36,6 +41,7 @@
   *    GPIO      PA4  (A3)  -> W5500 SCSn
   *    GPIO      PA3  (A2)  -> W5500 RSTn
   *    EXTI1     PA1  (A1)  <- W5500 INTn
+  *    TIM2_CH1  PA0  (A0)  <- GPS PPS (optional)
   *  SPI1 is on PB3/PB4/PB5, not PA5/PA6/PA7: on the NUCLEO-L432KC, SB16/SB18
   *  join PA5/PA6 to PB7/PB6, the GPS UART.
   ******************************************************************************
@@ -70,6 +76,7 @@
 #include "xEthernet.h"
 #include "NtpServer.h"
 #include "stm32_rtc.h"
+#include "pps_math.h"
 #include <atomic>
 #include "Font5x7.h"
 
@@ -94,6 +101,7 @@ typedef struct {
   // UTC from the last RMC with a fix, date and time; timeSeq counts them
   ClockTime utc;
   uint32_t  timeTick;      // osKernelGetTickCount() when it was parsed
+  uint32_t  timeTimer;     // TIM2's count (1 MHz) then: to pair it with its PPS edge
   uint32_t  timeSeq;
 } GpsStatus;
 /* USER CODE END PTD *//* USER CODE END PTD *//* USER CODE END PTD */
@@ -133,6 +141,11 @@ typedef struct {
 // After this long without a GPS or network set the NTP server says "not synchronised"
 #define NTP_HOLDOVER_S          (24UL * 3600UL)
 
+// PPS: TIM2 counts at 1 MHz (80 MHz / 80) and latches the PPS edge on PA0
+#define PPS_TIMER_PRESCALER     79
+#define PPS_ROOT_DISPERSION_US  1000UL     // locked: the RTC's 244 us step and the loop's 400 us band
+#define PPS_TIMEOUT_MS          3000UL     // no PPS paired with an RMC for this long: back to NMEA timing
+
 // Ethernet address: DHCP, or this static one
 #define ETH_DHCP                1
 #define ETH_STATIC_IP           192, 168, 1, 50
@@ -151,6 +164,8 @@ I2C_HandleTypeDef hi2c1;
 RTC_HandleTypeDef hrtc;
 
 SPI_HandleTypeDef hspi1;
+
+TIM_HandleTypeDef htim2;
 DMA_HandleTypeDef hdma_spi1_rx;
 DMA_HandleTypeDef hdma_spi1_tx;
 
@@ -161,7 +176,7 @@ UART_HandleTypeDef huart2;
 osThreadId_t displayTaskHandle;
 const osThreadAttr_t displayTask_attributes = {
   .name = "displayTask",
-  .stack_size = 768 * 4,
+  .stack_size = 1024 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for gpsTask */
@@ -217,6 +232,12 @@ struct StmRtcNtpClock : NtpServer::Clock {
   }
 };
 static StmRtcNtpClock ntpClock;
+
+// PPS edges, as TIM2 latched them: the last four, written by the capture
+// interrupt, read by the clock task (a second apart, so no slot is reused
+// while it is being read).
+static volatile uint32_t g_ppsRing[4];
+static std::atomic<uint32_t> g_ppsCount{0};
 static NtpServer ntpServer(ntpClock, NTP_PRECISION_LOG2, 20);   // LSE: 20 ppm
 
 /* USER CODE END PV */
@@ -227,6 +248,7 @@ static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_RTC_Init(void);
+static void MX_TIM2_Init(void);
 static void MX_SPI1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
@@ -237,7 +259,9 @@ void StartEthTask(void *argument);
 /* USER CODE BEGIN PFP */
 static void debugPrint(const char *str);
 static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &utc, const GpsStatus &g,
-                       const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok);
+                       const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok,
+                       bool ppsLocked, int32_t calPpb);
+static bool findPps(uint32_t rmcAt, uint32_t *ppsAt);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -315,8 +339,34 @@ static void formatEth(char *out, size_t len)
     snprintf(out, len, "IP %s", eth->address().ip.format(ip));
 }
 
+// The PPS edge an RMC (parsed at TIM2 count rmcAt) belongs to: the one
+// before it, within a second, which itself came a second after the one
+// before (a lone or glitched edge isn't trusted).
+static bool findPps(uint32_t rmcAt, uint32_t *ppsAt)
+{
+  const uint32_t n = g_ppsCount.load(std::memory_order_acquire);
+  for (uint32_t i = 1; i < 4 && i < n; ++i) {
+    const uint32_t at = g_ppsRing[(n - i) & 3];
+    if (ppsmath::rmcFollowsPps(at, rmcAt)) {
+      if (!ppsmath::ppsIntervalOk(g_ppsRing[(n - i - 1) & 3], at))
+        return false;
+      *ppsAt = at;
+      return true;
+    }
+  }
+  return false;
+}
+
+// "+12.3" from ppb, without printf float support
+static void formatPpm(char *out, size_t len, int32_t ppb)
+{
+  const long a = labs((long)ppb);
+  snprintf(out, len, "%c%ld.%ld", ppb < 0 ? '-' : '+', a / 1000, (a % 1000) / 100);
+}
+
 static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &utc, const GpsStatus &g,
-                       const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok)
+                       const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok,
+                       bool ppsLocked, int32_t calPpb)
 {
   char line[32];
 
@@ -360,10 +410,18 @@ static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &
 
   // Where the clock's time came from
   switch (source) {
+  case RtcSource::GpsPps:
+    if (ppsLocked) {
+      char ppm[12];
+      formatPpm(ppm, sizeof(ppm), calPpb);
+      snprintf(line, sizeof(line), "PPS lock %sppm", ppm);
+      break;
+    }
+    // fall through: PPS lost, the RTC holds the time it was locked to
   case RtcSource::Gps:
   case RtcSource::Network:
     snprintf(line, sizeof(line), "RTC synced %02u:%02uZ %s", lastSet.hour, lastSet.minute,
-             source == RtcSource::Gps ? "GPS" : "NTP");
+             source == RtcSource::GpsPps ? "PPS" : source == RtcSource::Gps ? "GPS" : "NTP");
     break;
   case RtcSource::Ds1307:
     snprintf(line, sizeof(line), "RTC from DS1307");
@@ -410,7 +468,9 @@ int main(void)
   MX_USART2_UART_Init();
   MX_SPI1_Init();
   MX_RTC_Init();
+  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);   // PPS capture: TIM2 free-running at 1 MHz
   debugPrint("\r\nSTM32L432KC GPS clock: DS1307 + SSD1306 + MTK3333\r\n");
 
   // The drivers are created in their tasks, once the scheduler is
@@ -660,6 +720,55 @@ static void MX_RTC_Init(void)
 }
 
 /**
+  * @brief TIM2 Initialization Function: a free-running 32-bit 1 MHz counter,
+  *        channel 1 capturing the GPS's PPS rising edge on PA0
+  * @param None
+  * @retval None
+  */
+static void MX_TIM2_Init(void)
+{
+
+  /* USER CODE BEGIN TIM2_Init 0 */
+
+  /* USER CODE END TIM2_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_IC_InitTypeDef sConfigIC = {0};
+
+  /* USER CODE BEGIN TIM2_Init 1 */
+
+  /* USER CODE END TIM2_Init 1 */
+  htim2.Instance = TIM2;
+  htim2.Init.Prescaler = PPS_TIMER_PRESCALER;
+  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim2.Init.Period = 4294967295;
+  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_IC_Init(&htim2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 4;   // a few samples: ignores glitches shorter than ~0.1 us
+  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM2_Init 2 */
+
+  /* USER CODE END TIM2_Init 2 */
+
+}
+
+/**
   * @brief SPI1 Initialization Function (W5500)
   * @param None
   * @retval None
@@ -832,6 +941,17 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// The PPS edge, latched by TIM2 channel 1 in hardware: the count is exact
+// whatever the interrupt's latency
+extern "C" void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+  if (htim->Instance == TIM2 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1) {
+    const uint32_t n = g_ppsCount.load(std::memory_order_relaxed);
+    g_ppsRing[n & 3] = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
+    g_ppsCount.store(n + 1, std::memory_order_release);
+  }
+}
+
 // The W5500's INTn (PA1): wakes the network driver thread at once
 extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
@@ -863,7 +983,7 @@ void StartDisplayTask(void *argument)
   static Ds1307Clock ds1307(dsParam, &hi2c1, DS1307_ADDR, i2c1_mutexHandle);
   static OledDisplay oled(SSD1306::ssd1306_default_param(64), &hi2c1, SSD1306_I2C_ADDR, i2c1_mutexHandle);
 
-  char msg[200];
+  char msg[260];
   int lastSecond = -1;
   bool lastClockSet = false;
   bool redrawPending = true;
@@ -880,9 +1000,9 @@ void StartDisplayTask(void *argument)
   if (StmRtc_LastSet(&source, &lastSetUnix)) {
     uint32_t nowSec, frac;
     const bool fresh = StmRtc_Read(&nowSec, &frac, 10) && nowSec - lastSetUnix < NTP_HOLDOVER_S;
-    if (fresh && source == RtcSource::Gps) {
-      ntpServer.setReference(1, NtpServer::refIdAscii("GPS"), NtpServer::fromUnix(lastSetUnix, 0), 0,
-                             GPS_ROOT_DISPERSION_US);
+    if (fresh && (source == RtcSource::Gps || source == RtcSource::GpsPps)) {
+      ntpServer.setReference(1, NtpServer::refIdAscii(source == RtcSource::GpsPps ? "PPS" : "GPS"),
+                             NtpServer::fromUnix(lastSetUnix, 0), 0, GPS_ROOT_DISPERSION_US);
       ntpSynced = true;
     } else if (fresh && source == RtcSource::Network) {
       ntpServer.setReference(NET_STRATUM, 0, NtpServer::fromUnix(lastSetUnix, 0), 0, NET_ROOT_DISPERSION_US);
@@ -894,6 +1014,14 @@ void StartDisplayTask(void *argument)
   }
 
   uint32_t usedTimeSeq = 0;      // the GPS time last applied, by its timeSeq
+
+  // PPS discipline
+  ppsmath::Discipline disc(StmRtc_CalibrationPpb());   // RTC_CALR survives a reset
+  uint32_t usedPpsSeq = 0;       // the GPS time last paired with a PPS edge
+  bool havePps = false;
+  uint32_t lastPpsTick = 0;
+  int64_t lastPpsErrUs = 0;
+  uint32_t nmeaDelayMs = 0;      // how late the RMC came after its PPS edge: measured
   bool dsCopyPending = false;    // write the DS1307 from the STM32 RTC at the next second
   bool dsWriting = false;
   char ethLine[24] = "";
@@ -917,9 +1045,66 @@ void StartDisplayTask(void *argument)
     xEthernet *eth = g_eth.load();
     const bool due = source == RtcSource::None || source == RtcSource::Ds1307
                      || (tick - lastSetTick) >= RTC_RESYNC_INTERVAL_MS;
+    const bool fromGps = source == RtcSource::Gps || source == RtcSource::GpsPps;
 
-    // 1. GPS time, when it is due, or when the clock came from anywhere else
-    if ((due || source != RtcSource::Gps) && g.timeSeq != usedTimeSeq && (tick - g.timeTick) < GPS_TIME_MAX_AGE_MS) {
+    // 0. The PPS edge of the second the latest RMC names, if one was latched:
+    //    measure the RTC against it, and correct phase and frequency.
+    if (g.timeSeq != usedPpsSeq && (tick - g.timeTick) < GPS_TIME_MAX_AGE_MS) {
+      usedPpsSeq = g.timeSeq;
+      uint32_t ppsAt;
+      if (findPps(g.timeTimer, &ppsAt)) {
+        const uint32_t S = DS1307::ds1307_to_unix(g.utc);   // the second the edge started
+        nmeaDelayMs = (g.timeTimer - ppsAt) / 1000;
+        int64_t err = ppsmath::Discipline::kSetUs;          // not set yet: set it
+        uint32_t sec, frac, at;
+        bool measured = !StmRtc_IsSet();
+        if (!measured && StmRtc_ReadWithCounter(&sec, &frac, &TIM2->CNT, &at, 5)) {
+          err = ppsmath::rtcErrorUs(sec, frac, at, S, ppsAt);
+          measured = true;
+        }
+        lastPpsErrUs = err;
+        // RTC busy just now: skip this second rather than take it as unset
+        const ppsmath::Discipline::Step st = measured ? disc.update(S, err) : ppsmath::Discipline::Step();
+        if (st.set) {
+          const uint32_t el = TIM2->CNT - ppsAt;            // time since the edge
+          if (StmRtc_Set(S + el / 1000000u, (uint32_t)(((uint64_t)(el % 1000000u) << 32) / 1000000u),
+                         RtcSource::GpsPps)) {
+            source = RtcSource::GpsPps;
+            lastSetUnix = S;
+            lastSetTick = tick;
+            dsCopyPending = true;
+          }
+        }
+        if (st.shift)
+          StmRtc_ShiftUs(st.shiftUs);
+        if (st.calibrate)
+          StmRtc_SetCalibrationPpb(st.calPpb);
+        havePps = true;
+        lastPpsTick = tick;
+        if (disc.locked()) {
+          ntpServer.setReference(1, NtpServer::refIdAscii("PPS"), NtpServer::fromUnix(S, 0), 0, PPS_ROOT_DISPERSION_US);
+          ntpSynced = true;
+          if (source != RtcSource::GpsPps || (tick - lastSetTick) >= RTC_RESYNC_INTERVAL_MS) {
+            source = RtcSource::GpsPps;
+            lastSetUnix = S;
+            lastSetTick = tick;
+            StmRtc_NoteSource(RtcSource::GpsPps, S);
+            dsCopyPending = true;           // the DS1307 follows, hourly
+          }
+        }
+      }
+    }
+    const bool ppsActive = havePps && (tick - lastPpsTick) < PPS_TIMEOUT_MS;
+    if (havePps && !ppsActive) {
+      havePps = false;                      // PPS lost: NMEA timing from here, the loop starts over
+      disc.restart();
+    }
+
+    // 1. GPS time from NMEA, without PPS: when it is due, or when the clock came from anywhere else
+    if (ppsActive) {
+      // the PPS keeps the RTC right
+    }
+    else if ((due || !fromGps) && g.timeSeq != usedTimeSeq && (tick - g.timeTick) < GPS_TIME_MAX_AGE_MS) {
       usedTimeSeq = g.timeSeq;
       // g.utc is the second the RMC named; time has moved on since it was parsed
       const uint32_t ms = GPS_NMEA_DELAY_MS + (tick - g.timeTick);
@@ -937,7 +1122,7 @@ void StartDisplayTask(void *argument)
     }
     // 2. Network time (SNTP), when there is no GPS fix and the clock isn't GPS time still in holdover
     else if (due && !g.fix && eth != nullptr && eth->timeValid()
-             && !(source == RtcSource::Gps && ntpSynced)) {
+             && !(fromGps && ntpSynced)) {
       const uint64_t unixMs = eth->unixTimeMs();
       const uint32_t unixSec = (uint32_t)(unixMs / 1000);
       const uint32_t frac = (uint32_t)(((unixMs % 1000) << 32) / 1000);
@@ -996,15 +1181,19 @@ void StartDisplayTask(void *argument)
       redrawPending = true;
 
       const NtpServer::Stats ns = ntpServer.stats();
+      char calText[12];
+      formatPpm(calText, sizeof(calText), disc.calPpb());
       snprintf(msg, sizeof(msg),
-               "RTC %04u-%02u-%02u %02u:%02u:%02u UTC (%s) | DS1307 %s | GPS %s sats=%u cfg=%s | %s | NTP %s req=%lu rep=%lu%s\r\n",
+               "RTC %04u-%02u-%02u %02u:%02u:%02u UTC (%s) | DS1307 %s | GPS %s sats=%u cfg=%s | %s | NTP %s req=%lu rep=%lu"
+               " | PPS %s err=%ldus cal=%sppm nmea=%lums%s\r\n",
                now.year, now.month, now.day, now.hour, now.minute, now.second,
-               source == RtcSource::Gps ? "GPS" : source == RtcSource::Network ? "network"
-                 : source == RtcSource::Ds1307 ? "DS1307" : "not set",
+               source == RtcSource::GpsPps ? "PPS" : source == RtcSource::Gps ? "GPS"
+                 : source == RtcSource::Network ? "network" : source == RtcSource::Ds1307 ? "DS1307" : "not set",
                !dsOk ? "not responding" : (ds1307.running() ? "ok" : "stopped"),
                !g.alive ? "no data" : (g.fix ? "fix" : "no fix"), g.satellites, configName(g.config), ethLine,
                ntpSynced ? "synced" : "unsynced", (unsigned long)ns.requests, (unsigned long)ns.replies,
-               oled.failed() ? " | SSD1306 not responding" : "");
+               !ppsActive ? "none" : (disc.locked() ? "locked" : "locking"), (long)lastPpsErrUs, calText,
+               (unsigned long)nmeaDelayMs, oled.failed() ? " | SSD1306 not responding" : "");
       debugPrint(msg);
     }
 
@@ -1014,7 +1203,7 @@ void StartDisplayTask(void *argument)
       redrawPending = false;
       ClockTime lastSet;
       DS1307::ds1307_from_unix(lastSetUnix, &lastSet);
-      drawScreen(oled, clockSet, now, g, ethLine, source, lastSet, dsOk);
+      drawScreen(oled, clockSet, now, g, ethLine, source, lastSet, dsOk, ppsActive && disc.locked(), disc.calPpb());
       oled.requestFlush();
     }
 
@@ -1078,6 +1267,7 @@ void StartGpsTask(void *argument)
     if (timeGood) {
       gpsStatus.utc = utc;
       gpsStatus.timeTick = osKernelGetTickCount();
+      gpsStatus.timeTimer = TIM2->CNT;
       gpsStatus.timeSeq = ++timeSeq;
     }
     osMutexRelease(gps_data_mutexHandle);

@@ -18,6 +18,7 @@
 
 #include "stm32_rtc.h"
 #include "stm32_rtc_math.h"
+#include "pps_math.h"
 
 // stm32_rtc_math.h's field positions, against the device header
 static_assert(rtcmath::kTrSecPos == RTC_TR_SU_Pos && rtcmath::kTrMinPos == RTC_TR_MNU_Pos
@@ -25,6 +26,7 @@ static_assert(rtcmath::kTrSecPos == RTC_TR_SU_Pos && rtcmath::kTrMinPos == RTC_T
 static_assert(rtcmath::kDrDayPos == RTC_DR_DU_Pos && rtcmath::kDrMonthPos == RTC_DR_MU_Pos
               && rtcmath::kDrWdPos == RTC_DR_WDU_Pos && rtcmath::kDrYearPos == RTC_DR_YU_Pos, "RTC_DR field positions");
 static_assert(RTC_TR_PM == (1u << 22) && RTC_SHIFTR_ADD1S == (1u << 31), "RTC_TR.PM and RTC_SHIFTR.ADD1S");
+static_assert(RTC_CALR_CALP == (1u << 15) && RTC_CALR_CALM == 0x1FFu, "RTC_CALR.CALP and CALM");
 
 namespace {
 
@@ -94,6 +96,54 @@ bool StmRtc_Set(uint32_t unixSeconds, uint32_t fraction, RtcSource source) {
 	}
 	unlock();
 	return ok;
+}
+
+bool StmRtc_ReadWithCounter(uint32_t *unixSeconds, uint32_t *fraction, volatile const uint32_t *counter,
+                            uint32_t *counterAt, uint32_t timeoutMs) {
+	if (!StmRtc_IsSet() || !lock(timeoutMs)) return false;
+	const uint32_t primask = __get_PRIMASK();
+	__disable_irq();
+	const uint32_t at = *counter;
+	const uint32_t ssr = s_hrtc->Instance->SSR;
+	const uint32_t tr = s_hrtc->Instance->TR;
+	const uint32_t dr = s_hrtc->Instance->DR;
+	__set_PRIMASK(primask);
+	unlock();
+	*counterAt = at;
+	return rtcmath::fromRegisters(tr, dr, ssr, predivS(), unixSeconds, fraction);
+}
+
+bool StmRtc_ShiftUs(int64_t errUs) {
+	ppsmath::Shift sh;
+	if (!StmRtc_IsSet() || !ppsmath::shiftFor(errUs, predivS(), &sh) || !lock(kSetTimeoutMs)) return false;
+	const bool ok = HAL_RTCEx_SetSynchroShift(s_hrtc, sh.add1s ? RTC_SHIFTADD1S_SET : RTC_SHIFTADD1S_RESET,
+	                                          sh.subfs) == HAL_OK;
+	unlock();
+	return ok;
+}
+
+bool StmRtc_SetCalibrationPpb(int32_t ppb) {
+	bool calp;
+	uint32_t calm;
+	ppsmath::calibrationFor(ppb, &calp, &calm);
+	if (!lock(kSetTimeoutMs)) return false;
+	const bool ok = HAL_RTCEx_SetSmoothCalib(s_hrtc, RTC_SMOOTHCALIB_PERIOD_32SEC,
+	                                         calp ? RTC_SMOOTHCALIB_PLUSPULSES_SET : RTC_SMOOTHCALIB_PLUSPULSES_RESET,
+	                                         calm) == HAL_OK;
+	unlock();
+	return ok;
+}
+
+int32_t StmRtc_CalibrationPpb(void) {
+	const uint32_t calr = s_hrtc->Instance->CALR;
+	return ppsmath::calibrationPpb((calr & RTC_CALR_CALP) != 0, calr & RTC_CALR_CALM);
+}
+
+void StmRtc_NoteSource(RtcSource source, uint32_t unixSeconds) {
+	if (!lock(kSetTimeoutMs)) return;
+	HAL_RTCEx_BKUPWrite(s_hrtc, RTC_BKP_DR0, (kBkpMagic << 4) | (uint32_t)source);
+	HAL_RTCEx_BKUPWrite(s_hrtc, RTC_BKP_DR1, unixSeconds);
+	unlock();
 }
 
 bool StmRtc_LastSet(RtcSource *source, uint32_t *unixSeconds) {
