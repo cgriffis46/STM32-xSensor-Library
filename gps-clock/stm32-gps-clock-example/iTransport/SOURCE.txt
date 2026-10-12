@@ -19,7 +19,8 @@ Copied unchanged; only the files this example needs:
   isensor/mtk3339                <- isensor/mtk3339
   isensor/ds1307                 <- isensor/ds1307 (inc, src); in review as
                                     cgriffis46/Claude-iTransport#34 (branch
-                                    claude/ds1307-w5500-ntp), the same code as b2b072e
+                                    claude/ds1307-w5500-ntp), the same code as a3cd530
+                                    (with readRam()/writeRam())
   iDisplay/inc, src              <- iDisplay/inc, src (MonoCanvas, iTextSurface, Font5x7, iDisplayDevice)
   iDisplay/ssd1306               <- iDisplay/ssd1306
   iNetTransport/inc              <- iNetTransport/inc (NetTypes, iNetDevice)

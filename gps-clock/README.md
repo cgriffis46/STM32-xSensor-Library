@@ -11,6 +11,7 @@ STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combine
 | NTP server | `iNetTransport/sntp`: `NtpServer`, on the W5500's UDP responder (socket 6) | UDP port 123 |
 | STM32 RTC | `Core/Src/stm32_rtc.cpp` | LSE, PREDIV 3/8191 |
 | GPS PPS (optional) | `Core/Inc/pps_math.h`, TIM2 input capture | PA0 (A0) |
+| DS1307 SQW/OUT, 1 Hz (optional) | `Core/Inc/ds1307_ref.h`, TIM2 input capture | PA1 (A1) |
 
 The drivers are the non-blocking ones from
 [Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport), copied into
@@ -36,7 +37,10 @@ Time flows GPS -> STM32 RTC -> DS1307, and the NTP server serves the STM32 RTC:
   "PPS" below): within about half a millisecond, and the NTP server says
   stratum 1, reference `PPS`, 1 ms dispersion. NMEA timing is the fallback.
 * After a power cycle the STM32 RTC starts empty (on the Nucleo, VBAT is tied to
-  VDD) and is seeded from the battery-backed DS1307; the NTP server says "not
+  VDD) and is seeded from the battery-backed DS1307. With its SQW output wired
+  to PA1 and measured against the PPS beforehand, to its edge and corrected for
+  its drift (see "DS1307 as a reference" below), and the NTP server holds over;
+  otherwise to the whole second (+0.5 s), and the NTP server says "not
   synchronised" until GPS or network time arrives. A reset keeps the RTC and,
   in backup registers, where its time came from.
 
@@ -57,13 +61,21 @@ The system clock is 80 MHz (MSI + PLL, trimmed by the LSE crystal).
 | SPI1_MOSI | PB5 | D11 | W5500 MOSI |
 | GPIO out | PA4 | A3 | W5500 SCSn |
 | GPIO out | PA3 | A2 | W5500 RSTn |
-| EXTI1 | PA1 | A1 | W5500 INTn (pulled up; optional, the driver polls without it) |
+| EXTI8 | PA8 | D9 | W5500 INTn (pulled up; optional, the driver polls without it) |
 | TIM2_CH1 | PA0 | A0 | GPS PPS / 1PPS / FIX output (optional; pulled down; 3.3 V logic) |
+| TIM2_CH2 | PA1 | A1 | DS1307 SQW/OUT (optional; open drain: fit a 10k pull-up to **3.3 V**) |
 | 3V3, GND | | | W5500 3.3 V (about 130 mA) and GND |
 
 * I2C needs pull-ups to 3.3 V (most DS1307 and SSD1306 breakouts already have them).
   If the DS1307 board has pull-ups to 5 V, remove them or use a level shifter.
 * The DS1307 needs 5 V on VCC and a backup battery to keep time.
+* W5500 INTn moved from PA1 to PA8 (D9) when the DS1307's SQW took PA1:
+  PA1 is TIM2_CH2, so the SQW edge is latched by the same timer as the PPS.
+  Re-wire an earlier build. (PA1 = TIM2_CH2 and PA8 = D9 are general
+  knowledge of the L432 and the Nucleo-32, not checked in the datasheet here.)
+* SQW/OUT is open drain and the DS1307 runs from 5 V, but PA1 only sees the
+  pull-up's voltage: pull it up to 3.3 V, never 5 V. PA1's own pull-up is on
+  too, but at ~40k it is weak for a long wire.
 * SPI1 is on PB3/PB4/PB5, not the PA5/PA6/PA7 that Claude-iTransport's
   `stm32l432kc_bringup` uses: on the NUCLEO-L432KC the solder bridges SB16/SB18
   join PA5/PA6 to PB7/PB6, which are the GPS UART here. PA5/PA6 are left
@@ -153,17 +165,66 @@ modules only pulse once they have a fix. On some breakouts the pin is labelled
     RTC's smooth calibration (`RTC_CALR`, 0.95 ppm steps) to cancel it. The
     calibration survives a reset.
 * While locked (under 1 ms), every edge renews the NTP server's reference:
-  stratum 1, `PPS`, root dispersion 1 ms. The DS1307 is written hourly.
+  stratum 1, `PPS`, root dispersion 1 ms. The DS1307 is written hourly
+  (with its SQW in use: only when it has wandered 200 ms from UTC).
 * No paired edge for 3 s: back to NMEA timing, and the RTC holds the time and
   calibration it was locked to. The NTP server's dispersion grows by 20 ppm
   from the last edge.
 
 `test/pps_math_test.cpp` (on a PC) runs the loop against a simulated RTC whose
 crystal is off by -48 to +23 ppm: after six hours each is within 0.5 ppm, and the
-phase within 0.54 ms. The display's last line reads `PPS lock -23.8ppm` (the
+phase within 0.3 ms (the RTC counts in 1/8192 s: `PREDIV_A` 3, `PREDIV_S` 8191,
+the finest that keeps smooth calibration's CALP usable; `MX_RTC_Init()` rewrites
+the prescalers of an RTC left running with others). The display's last line reads `PPS lock -23.8ppm` (the
 calibration) while locked; the debug line shows the error, calibration and NMEA
 delay every second. Measure that NMEA delay with PPS, then put it in
 `GPS_NMEA_DELAY_MS` for when PPS is absent.
+
+### DS1307 as a reference
+
+The DS1307's SQW/OUT pin gives a 1 Hz square wave (control register 0x10). Its
+falling edge is taken to be where the DS1307's seconds tick (general knowledge,
+from secondary sources; the datasheet couldn't be fetched here), so that edge
+is latched on PA1 by TIM2, beside the PPS, and the DS1307 becomes a clock that
+can be measured to the microsecond. `Core/Inc/ds1307_ref.h` holds the logic:
+
+* **Labelling.** Each read's I2C START (the DS1307 latches its time on START)
+  is timed by TIM2 either side of the call that issues it; a read that starts
+  clearly inside one of the DS1307's seconds names the edge before it.
+* **Checking the assumption.** Until it is checked, reads alternate between
+  early (50-300 ms after an edge) and late (600-850 ms) in the second. If the
+  seconds ticked at the rising edge instead, early reads would name the edge one
+  second less than late ones. Two of each must agree; any disagreement and the
+  SQW is not used (`SQW MISMATCH` in the debug line).
+* **Measuring.** With the PPS paired to its second, each labelled edge gives
+  the DS1307's offset from UTC to about a microsecond (TIM2 scaled by the PPS
+  interval). After 1024 s the slope gives its drift. Offset, time and drift are
+  saved to the DS1307's battery-backed RAM (25 bytes at 0x08, CRC-8) when first
+  measured and every 10 minutes. The DS1307 is no longer rewritten every hour
+  (each write restarts its divider, and the measurement), only when it is 200 ms
+  from UTC; after a write the RAM says "offset unknown" until it is measured again.
+* **Cold start.** After a power cycle, once the check has passed (about 4 s),
+  the STM32 RTC is set from the latest labelled edge: the DS1307's time less its
+  saved offset carried on by its saved drift (`dsref::utcAtEdgeUs`). If that
+  measurement is under 24 h old the NTP server holds over (stratum 1, `PPS`,
+  reference time the measurement's, 2 ms + 20 ppm of age). No SQW within 8 s,
+  or a mismatch: the old way, whole seconds + 0.5 s.
+* **Holdover check.** Without PPS, each labelled edge compares the DS1307
+  (corrected) with the STM32 RTC (calibrated). If they drift apart by more than
+  5 ms + 2 ppm of the time since the measurement, one of the two crystals is
+  not doing what was measured, and the NTP server says "not synchronised"
+  (`DISAGREE` in the debug line).
+
+`test/ds1307_ref_test.cpp` (on a PC): DS1307s from -63 to +87.5 ppm measured
+for four hours give their drift to 0.001 ppm, and a cold start 30 days later
+lands within a few microseconds in simulation. On a board, temperature
+decides: the DS1307's tuning-fork crystal changes by about 0.034 ppm per C²
+away from 25 C (general knowledge), so a board 10 C away from where it was
+measured gains or loses about 3 ppm, some 0.3 s a day. The holdover check is
+there for that. A DS3231 (temperature compensated, with the same SQW and a
+32 kHz output) would hold far better, and is the plan for a custom board.
+
+The debug line shows `SQW ok off=<us> drift=<ppm>/<span s>`.
 
 The NTP server (`NtpServer`) runs in `ethTask`: the W5500 driver hands it each
 request on socket 6 as it is read, it reads the STM32 RTC (receive timestamp,
@@ -182,7 +243,7 @@ Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`
 
 ## Requirements of the iTransport drivers
 
-* I2C1 event and error, USART1, SPI1, DMA1 channel 2/3 and EXTI1 interrupts
+* I2C1 event and error, USART1, SPI1, DMA1 channel 2/3 and EXTI9_5 (W5500 INTn) interrupts
   enabled, priority 5
   (numerically at or above `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, since they wake
   FreeRTOS threads). Set in the .ioc and `stm32l4xx_hal_msp.c`.
@@ -202,23 +263,32 @@ Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`
 ## Not verified
 
 * Not run on hardware yet; only built with arm-none-eabi-gcc 13 using the
-  CubeIDE flags (146 KB flash at -O0, 78 KB at -Os; 43 KB RAM). The drivers' own
+  CubeIDE flags (156 KB flash at -O0, 81 KB at -Os; 43 KB RAM). The drivers' own
   host tests (`ds1307_test`, `mtk3339_test`, `nmea_parser_test`, `ssd1306_test`,
   `W5500_test` with the UDP responder cases, `NtpServer_test`, `DhcpClient_test`,
   `DnsClient_test`, `SntpClient_test`, `xNet_test`) pass at the vendored commits,
   and on a PC `test/stm32_rtc_math_test.cpp` (the RTC register arithmetic and the
   sub-second shift, against a model of the RTC from RM0394) and
   `test/pps_math_test.cpp` (pairing, error, shift and calibration registers, and
-  the PPS loop against a drifting simulated RTC) pass.
+  the PPS loop against a drifting simulated RTC) and `test/ds1307_ref_test.cpp`
+  (labelling, the falling-edge check, the RAM record, drift measurement and
+  cold-start seeding against simulated DS1307s) pass.
 * Without PPS, NTP accuracy is limited by the GPS's NMEA timing: the RMC sentence
   arrives some 100-500 ms after the second it names, depending on the module and
   baud rate. Set `GPS_NMEA_DELAY_MS` (measure it with PPS: `nmea=` in the debug
   line). With PPS the limit is the RTC's 122 us step and the loop's 250 us band
   (simulated: within 0.2-0.3 ms of the PPS after 6 hours).
 * The PPS pin and its pairing with RMC haven't been tried on a module.
+* The DS1307's SQW: that its seconds tick at the falling edge is unverified
+  (the check above tests it on the board), and so is how long after an edge the
+  new time can be read. With a logic analyser: SQW on one channel, I2C on two
+  more; a read just after a falling edge should show the new second.
+* A cold start with SQW waits about 4 s for the check (8 s without SQW) before
+  the clock shows the time. After a reset (not a power cycle) a clock seeded
+  from the DS1307 serves "not synchronised" until GPS returns.
 * The .ioc was edited by hand for SPI1, DMA, the W5500 pins, the 80 MHz clock,
-  the RTC (LSE, PREDIV 3/8191), `rtc_mutex`, TIM2 input capture on PA0 and the
-  third task. Open it in CubeMX and check it before generating code over
+  the RTC (LSE, PREDIV 3/8191), `rtc_mutex`, TIM2 input capture on PA0 and PA1
+  (W5500 INTn on PA8, EXTI9_5) and the third task. Open it in CubeMX and check it before generating code over
   this project.
 * The clock setup expects the LSE crystal (X2, fitted on the NUCLEO-L432KC).
   Without it `SystemClock_Config()` stops in `Error_Handler()`.

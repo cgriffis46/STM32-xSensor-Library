@@ -36,7 +36,10 @@
  *  running() reports it, and the first setTime() starts it. The time a
  *  stopped chip reports is stale, but getTime() still returns it.
  *
- *  Not done: the 56 bytes of battery-backed RAM (0x08..0x3F).
+ *  The 56 bytes of battery-backed RAM (0x08..0x3F): readRam() reads all
+ *  of them at the next main(), writeRam() writes up to 32 at a time
+ *  (ISensorTransport::kMaxWriteLen). Kept while the battery holds; what
+ *  the bytes mean is the caller's (a new chip's RAM is undefined).
  *
  *  Register layout, the CH bit, the 12/24 hour bit, the control
  *  register and the START latching are from the DS1307 datasheet
@@ -68,6 +71,10 @@ typedef enum ds1307_state_t{
 	ds1307_wait_read_state,
 	ds1307_write_time_state,		// issue the time write
 	ds1307_wait_write_time_state,
+	ds1307_ram_write_state,			// issue a writeRam()
+	ds1307_wait_ram_write_state,
+	ds1307_ram_read_state,			// issue a readRam()
+	ds1307_wait_ram_read_state,
 	ds1307_err_state				// pause, then start again from ds1307_init_state
 }ds1307_state_t;
 
@@ -108,6 +115,8 @@ const uint32_t ds1307_bus_timeout_ms = 100;		// one transfer, to issue or to lan
 const uint32_t ds1307_error_backoff_ms = 500;	// in ds1307_err_state before starting again
 const uint32_t ds1307_request_poll_ms = 100;	// longest sleep, so setTime()/readNow() are seen promptly
 
+const uint8_t ds1307_ram_size = 56;				// bytes of battery-backed RAM
+
 struct ds1307_param_t {
 	uint32_t period_ms;		// between reads
 	ds1307_sqw_t sqw;		// what the SQW/OUT pin does
@@ -115,9 +124,10 @@ struct ds1307_param_t {
 	ds1307_param_t() : period_ms(1000), sqw(ds1307_sqw_t::Low) {}
 };
 
-// What became of the last setTime().
+// What became of the last setTime() (and of the last writeRam() or
+// readRam(), which report the same way).
 enum class ds1307_set_status_t : uint8_t {
-	None,		// no setTime() yet
+	None,		// no request yet
 	Pending,	// waiting to be written
 	Done,		// written (and read back at once by the next read)
 	Failed		// the write failed; not retried (the time would be stale): call setTime() again
@@ -177,6 +187,19 @@ public:
 	// Read at the next main() instead of waiting out the period.
 	void readNow() { _readNow = true; }
 
+	// Battery-backed RAM. offset 0..55 is register 0x08 + offset.
+	// writeRam() copies len (1..32) bytes to be written at the next
+	// main(), replacing a write still waiting; false, and nothing queued,
+	// if they don't fit. A setTime() goes first. Not retried on failure.
+	bool writeRam(uint8_t offset, const uint8_t* data, uint8_t len);
+	ds1307_set_status_t ramWriteStatus() const { return _ramWriteStatus; }
+	// Reads all 56 bytes at the next main() (after any writeRam()).
+	void readRam();
+	ds1307_set_status_t ramReadStatus() const { return _ramReadStatus; }
+	// The bytes of the last readRam() that landed (ramReadStatus() Done):
+	// copies all 56 into out. False, out untouched, otherwise.
+	bool getRam(uint8_t* out) const;
+
 protected:
 	void onFail() override;
 
@@ -190,6 +213,8 @@ private:
 	// The transport fills this after main() has returned: a member.
 	uint8_t _regs[7];
 	uint8_t _setRegs[7];			// the time setTime() asked for, encoded
+	uint8_t _ram[ds1307_ram_size];	// readRam() lands here
+	uint8_t _ramOut[ISensorTransport::kMaxWriteLen];	// writeRam()'s bytes
 
 	ds1307_time_t _time;
 	bool _haveTime;
@@ -198,6 +223,12 @@ private:
 	bool _readNow;
 	bool _setWanted;
 	ds1307_set_status_t _setStatus;
+	uint8_t _ramOutOffset;
+	uint8_t _ramOutLen;
+	bool _ramWriteWanted;
+	bool _ramReadWanted;
+	ds1307_set_status_t _ramWriteStatus;
+	ds1307_set_status_t _ramReadStatus;
 };
 
 } /* namespace DS1307 */

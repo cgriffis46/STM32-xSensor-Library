@@ -20,6 +20,11 @@
   *  shifts, frequency by the RTC's smooth calibration (Core/Inc/pps_math.h).
   *  NMEA timing (to about 100-500 ms) is then only the fallback.
   *
+  *  With the DS1307's SQW/OUT (1 Hz) wired to PA1, TIM2 latches its edges
+  *  too: the DS1307's offset and drift are measured against the PPS and
+  *  kept in its RAM, and after a power cycle the STM32 RTC is seeded from
+  *  its edge with them (Core/Inc/ds1307_ref.h).
+  *
   *  All four use the non-blocking drivers from Claude-iTransport
   *  (see iTransport/SOURCE.txt):
   *    xds1307<Stm32HalI2CTransport>    isensor/ds1307
@@ -40,8 +45,9 @@
   *    SPI1_MOSI PB5  (D11) -> W5500 MOSI
   *    GPIO      PA4  (A3)  -> W5500 SCSn
   *    GPIO      PA3  (A2)  -> W5500 RSTn
-  *    EXTI1     PA1  (A1)  <- W5500 INTn
+  *    EXTI8     PA8  (D9)  <- W5500 INTn
   *    TIM2_CH1  PA0  (A0)  <- GPS PPS (optional)
+  *    TIM2_CH2  PA1  (A1)  <- DS1307 SQW/OUT (optional; 10k pull-up to 3.3 V)
   *  SPI1 is on PB3/PB4/PB5, not PA5/PA6/PA7: on the NUCLEO-L432KC, SB16/SB18
   *  join PA5/PA6 to PB7/PB6, the GPS UART.
   ******************************************************************************
@@ -77,6 +83,7 @@
 #include "NtpServer.h"
 #include "stm32_rtc.h"
 #include "pps_math.h"
+#include "ds1307_ref.h"
 #include <atomic>
 #include "Font5x7.h"
 
@@ -117,8 +124,9 @@ typedef struct {
 // A GPS time older than this is not written to the DS1307
 #define GPS_TIME_MAX_AGE_MS     500UL
 
-// How often the DS1307 is read (it is a backup now: the STM32 RTC is the clock)
-#define DS1307_READ_PERIOD_MS   1000UL
+// The DS1307 is read once a second by readNow() (at a chosen place in its
+// second when its SQW is wired); the driver's own period is the backstop
+#define DS1307_READ_PERIOD_MS   5000UL
 
 // The DS1307 is written from the STM32 RTC only this close after a second
 // starts, since writing its seconds register restarts its 1 Hz divider
@@ -148,6 +156,13 @@ typedef struct {
 #define PPS_TIMER_PRESCALER     79
 #define PPS_ROOT_DISPERSION_US  1000UL     // locked: the RTC's 122 us step and the loop's 250 us band
 #define PPS_TIMEOUT_MS          3000UL     // no PPS paired with an RMC for this long: back to NMEA timing
+
+// DS1307 SQW/OUT on PA1 (TIM2_CH2): the DS1307 as a reference clock
+#define SQW_TIMEOUT_MS          2500UL     // no edge for this long: the SQW isn't there
+#define SQW_WAIT_MS             8000UL     // a cold start waits this long for the SQW check, then seeds without it
+#define DS_REWRITE_US           200000LL   // with SQW, the DS1307 is rewritten only when this far off UTC
+#define DS_SAVE_EVERY_S         600UL      // the measurement is saved to the DS1307's RAM this often
+#define DS_ROOT_DISPERSION_US   2000UL     // a cold start seeded from a measured DS1307
 
 // Ethernet address: DHCP, or this static one
 #define ETH_DHCP                1
@@ -243,6 +258,10 @@ static volatile uint32_t g_ppsRing[4];
 static std::atomic<uint32_t> g_ppsCount{0};
 static NtpServer ntpServer(ntpClock, NTP_PRECISION_LOG2, 20);   // LSE: 20 ppm
 
+// The DS1307's SQW falling edges, likewise (TIM2 channel 2), and how many.
+static volatile uint32_t g_sqwRing[4];
+static std::atomic<uint32_t> g_sqwCount{0};
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -263,7 +282,7 @@ void StartEthTask(void *argument);
 static void debugPrint(const char *str);
 static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &utc, const GpsStatus &g,
                        const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok,
-                       bool ppsLocked, int32_t calPpb);
+                       bool ppsLocked, int32_t calPpb, bool dsSqw);
 static bool findPps(uint32_t rmcAt, uint32_t *ppsAt);
 /* USER CODE END PFP */
 
@@ -360,6 +379,25 @@ static bool findPps(uint32_t rmcAt, uint32_t *ppsAt)
   return false;
 }
 
+// The latest DS1307 SQW edge before timer count `before` (within a second
+// and a bit), a second after the one before it, and its number (the
+// capture interrupt's count).
+static bool findSqw(uint32_t before, uint32_t *at, uint32_t *num)
+{
+  const uint32_t n = g_sqwCount.load(std::memory_order_acquire);
+  for (uint32_t i = 1; i < 4 && i < n; ++i) {
+    const uint32_t e = g_sqwRing[(n - i) & 3];
+    if (before - e < 1100000u) {
+      if (!dsref::edgeIntervalOk(g_sqwRing[(n - i - 1) & 3], e))
+        return false;
+      *at = e;
+      *num = n - i;
+      return true;
+    }
+  }
+  return false;
+}
+
 // "+12.3" from ppb, without printf float support
 static void formatPpm(char *out, size_t len, int32_t ppb)
 {
@@ -369,7 +407,7 @@ static void formatPpm(char *out, size_t len, int32_t ppb)
 
 static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &utc, const GpsStatus &g,
                        const char *ethLine, RtcSource source, const ClockTime &lastSet, bool ds1307Ok,
-                       bool ppsLocked, int32_t calPpb)
+                       bool ppsLocked, int32_t calPpb, bool dsSqw)
 {
   char line[32];
 
@@ -427,7 +465,7 @@ static void drawScreen(idisplay::MonoCanvas &c, bool clockSet, const ClockTime &
              source == RtcSource::GpsPps ? "PPS" : source == RtcSource::Gps ? "GPS" : "NTP");
     break;
   case RtcSource::Ds1307:
-    snprintf(line, sizeof(line), "RTC from DS1307");
+    snprintf(line, sizeof(line), dsSqw ? "RTC from DS1307 SQW" : "RTC from DS1307");
     break;
   default:
     snprintf(line, sizeof(line), ds1307Ok ? "RTC not set" : "RTC not set, no DS1307");
@@ -474,6 +512,7 @@ int main(void)
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_1);   // PPS capture: TIM2 free-running at 1 MHz
+  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);   // DS1307 SQW (1 Hz) falling edges, same timer
   debugPrint("\r\nSTM32L432KC GPS clock: DS1307 + SSD1306 + MTK3333\r\n");
 
   // The drivers are created in their tasks, once the scheduler is
@@ -742,7 +781,8 @@ static void MX_RTC_Init(void)
 
 /**
   * @brief TIM2 Initialization Function: a free-running 32-bit 1 MHz counter,
-  *        channel 1 capturing the GPS's PPS rising edge on PA0
+  *        channel 1 capturing the GPS's PPS rising edge on PA0, channel 2
+  *        the DS1307's SQW falling edge on PA1
   * @param None
   * @retval None
   */
@@ -780,6 +820,11 @@ static void MX_TIM2_Init(void)
   sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
   sConfigIC.ICFilter = 4;   // a few samples: ignores glitches shorter than ~0.1 us
   if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_FALLING;
+  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
   {
     Error_Handler();
   }
@@ -953,8 +998,8 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
-  HAL_NVIC_SetPriority(EXTI1_IRQn, 5, 0);
-  HAL_NVIC_EnableIRQ(EXTI1_IRQn);
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 5, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
 
@@ -971,9 +1016,14 @@ extern "C" void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
     g_ppsRing[n & 3] = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
     g_ppsCount.store(n + 1, std::memory_order_release);
   }
+  if (htim->Instance == TIM2 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) {
+    const uint32_t n = g_sqwCount.load(std::memory_order_relaxed);
+    g_sqwRing[n & 3] = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
+    g_sqwCount.store(n + 1, std::memory_order_release);
+  }
 }
 
-// The W5500's INTn (PA1): wakes the network driver thread at once
+// The W5500's INTn (PA8): wakes the network driver thread at once
 extern "C" void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
   xEthernet *eth = g_eth.load();
@@ -1004,7 +1054,7 @@ void StartDisplayTask(void *argument)
   static Ds1307Clock ds1307(dsParam, &hi2c1, DS1307_ADDR, i2c1_mutexHandle);
   static OledDisplay oled(SSD1306::ssd1306_default_param(64), &hi2c1, SSD1306_I2C_ADDR, i2c1_mutexHandle);
 
-  char msg[260];
+  char msg[360];
   int lastSecond = -1;
   bool lastClockSet = false;
   bool redrawPending = true;
@@ -1045,18 +1095,166 @@ void StartDisplayTask(void *argument)
   uint32_t nmeaDelayMs = 0;      // how late the RMC came after its PPS edge: measured
   bool dsCopyPending = false;    // write the DS1307 from the STM32 RTC at the next second
   bool dsWriting = false;
+
+  // The DS1307's SQW as a reference (Core/Inc/ds1307_ref.h)
+  dsref::LabelCheck labels;      // is the falling edge where its seconds tick?
+  dsref::Meter meter;            // its offset and drift against the PPS
+  dsref::Record rec;             // what its RAM holds
+  bool haveRec = false;
+  bool ramAsked = false, ramRead = false;
+  bool recDirty = false, ramSaving = false;
+  uint32_t savedSpan = 0;
+  bool savedThisRun = false;
+  uint32_t lastSqwTick = 0;
+  bool sqwEver = false;
+  uint32_t readEdgeNum = 0xFFFFFFFFu;  // the edge a read was last asked for
+  uint32_t lastDsAskTick = 0;
+  bool readTimed = false;        // the read in flight was issued between readFrom and readTo
+  uint32_t readFrom = 0, readTo = 0;
+  bool haveLabel = false;        // the latest labelled edge
+  uint32_t labelAt = 0, label = 0, labelTick = 0;
+  int64_t dsOffsetUs = 0;        // the latest measured DS1307 - UTC
+  bool dsAgree = true;
+  bool seededFromSqw = false;
+  uint32_t dsFirstOkTick = 0;
+  bool dsSeenOk = false;
+  bool ppsActive = false;        // last time round
+  uint32_t ppsRefSec = 0, ppsRefAt = 0, ppsRefPer = 1000000;
+  bool ppsRef = false;           // the latest PPS edge paired with its second: TIM2 counts to UTC
+
+  // Rewrite the DS1307 from the STM32 RTC? Always without a measured SQW;
+  // with one, only when it has wandered DS_REWRITE_US from UTC (each write
+  // restarts its divider, and with it the drift measurement).
+  auto dsCopyWanted = [&]() -> bool {
+    if (!labels.verified() || !meter.have() || !ppsActive)
+      return true;
+    const int64_t o = meter.offsetUs();
+    return o > DS_REWRITE_US || o < -DS_REWRITE_US;
+  };
   char ethLine[24] = "";
   char lastEthLine[24] = "";
 
   /* Infinite loop */
   for(;;)
   {
-    // The DS1307: read once a second (sleeps in osDelay up to 100 ms here)
+    // The DS1307: read once a second. With its SQW wired, early or late in
+    // its second as the falling-edge check wants (Core/Inc/ds1307_ref.h).
+    {
+      const uint32_t cnt = TIM2->CNT, t = osKernelGetTickCount();
+      uint32_t eAt, eNum;
+      const bool edge = findSqw(cnt, &eAt, &eNum);
+      if (edge) {
+        lastSqwTick = t;
+        sqwEver = true;
+      }
+      if (edge && eNum != readEdgeNum) {
+        const uint32_t since = cnt - eAt;
+        const dsref::ReadPhase want = labels.verified() ? dsref::ReadPhase::Early : labels.wanted();
+        if ((want == dsref::ReadPhase::Early && since >= 50000u && since < 300000u)
+            || (want == dsref::ReadPhase::Late && since >= 600000u && since < 850000u)) {
+          ds1307.readNow();
+          readEdgeNum = eNum;
+          lastDsAskTick = t;
+        }
+      } else if (!edge && t - lastDsAskTick >= 1000u) {
+        ds1307.readNow();
+        lastDsAskTick = t;
+      }
+    }
+    // (sleeps in osDelay up to 100 ms here). When a read is issued, note
+    // the timer either side: its START lies between.
+    const DS1307::ds1307_state_t dsBefore = ds1307.state();
+    const uint32_t issueFrom = TIM2->CNT;
     ds1307.main(osKernelGetTickCount());
-    if (ds1307.newData())
+    const uint32_t issueTo = TIM2->CNT;
+    if (dsBefore == DS1307::ds1307_read_state && ds1307.state() == DS1307::ds1307_wait_read_state) {
+      readTimed = true;
+      readFrom = issueFrom;
+      readTo = issueTo;
+    }
+    if (ds1307.newData()) {
       dsOk = ds1307.getTime(&ds);
+      uint32_t eAt, eNum;
+      if (dsOk && readTimed && ds1307.running() && findSqw(readFrom, &eAt, &eNum)) {
+        const dsref::ReadPhase ph = dsref::readPhase(eAt, readFrom, readTo);
+        if (ph != dsref::ReadPhase::None) {
+          const uint32_t L = DS1307::ds1307_to_unix(ds);   // the DS1307's second from that edge on
+          labels.add(ph, (int64_t)L - (int64_t)eNum);
+          haveLabel = true;
+          labelAt = eAt;
+          label = L;
+          labelTick = osKernelGetTickCount();
+          const int32_t fromPps = (int32_t)(eAt - ppsRefAt);
+          if (labels.verified() && ppsActive && ppsRef && fromPps > -2000000 && fromPps < 2000000) {
+            // Against the PPS: the edge's UTC, TIM2 scaled by its measured rate
+            const int64_t utcUs = (int64_t)ppsRefSec * 1000000 + (int64_t)fromPps * 1000000 / (int64_t)ppsRefPer;
+            dsOffsetUs = (int64_t)L * 1000000 - utcUs;
+            if (!meter.add(utcUs, dsOffsetUs))
+              savedThisRun = false;           // a new line: save its offset soon
+            if (!savedThisRun || meter.spanS() >= savedSpan + DS_SAVE_EVERY_S) {
+              rec = meter.record(rec);
+              haveRec = true;
+              recDirty = true;
+              savedSpan = meter.spanS();
+              savedThisRun = true;
+            }
+          } else if (labels.verified() && !ppsActive && haveRec && rec.refUnix != 0
+                     && (source == RtcSource::GpsPps || source == RtcSource::Ds1307)) {
+            // Holdover: does the DS1307 still agree with the STM32 RTC?
+            uint32_t sec, frac, at;
+            if (StmRtc_ReadWithCounter(&sec, &frac, &TIM2->CNT, &at, 5)) {
+              const int64_t rtcUs = (int64_t)sec * 1000000 + (int64_t)(((uint64_t)frac * 1000000u) >> 32)
+                                    - (int64_t)(uint32_t)(at - eAt);
+              dsOffsetUs = (int64_t)L * 1000000 - rtcUs;
+              const int64_t predicted = (int64_t)L * 1000000 - dsref::utcAtEdgeUs(rec, L);
+              const bool agree = dsref::agrees(dsOffsetUs, predicted, sec - rec.refUnix);
+              if (!agree && dsAgree && ntpSynced) {
+                ntpServer.setUnsynchronized();  // one of the two oscillators is wrong: say so
+                ntpSynced = false;
+              }
+              dsAgree = agree;
+            }
+          }
+        }
+      }
+      readTimed = false;
+    }
     if (ds1307.state() == DS1307::ds1307_err_state)
       dsOk = false;
+    if (dsOk && !dsSeenOk) {
+      dsSeenOk = true;
+      dsFirstOkTick = osKernelGetTickCount();
+    }
+    // Its RAM: read once, then the record written when it changes
+    if (dsOk && !ramAsked) {
+      ds1307.readRam();
+      ramAsked = true;
+    }
+    if (ramAsked && !ramRead) {
+      const DS1307::ds1307_set_status_t rs = ds1307.ramReadStatus();
+      if (rs == DS1307::ds1307_set_status_t::Done) {
+        uint8_t ram[DS1307::ds1307_ram_size];
+        if (ds1307.getRam(ram) && dsref::decode(ram, &rec))
+          haveRec = true;
+        ramRead = true;
+      } else if (rs == DS1307::ds1307_set_status_t::Failed) {
+        ramAsked = false;                     // ask again
+      }
+    }
+    if (ramSaving && ds1307.ramWriteStatus() != DS1307::ds1307_set_status_t::Pending) {
+      if (ds1307.ramWriteStatus() == DS1307::ds1307_set_status_t::Failed)
+        recDirty = true;
+      ramSaving = false;
+    }
+    if (recDirty && !ramSaving && ramRead) {
+      uint8_t buf[dsref::kRecordLen];
+      dsref::encode(rec, buf);
+      if (ds1307.writeRam(0, buf, dsref::kRecordLen)) {
+        recDirty = false;
+        ramSaving = true;
+      }
+    }
+    const bool sqwActive = sqwEver && (osKernelGetTickCount() - lastSqwTick) < SQW_TIMEOUT_MS;
 
     osMutexAcquire(gps_data_mutexHandle, osWaitForever);
     g = gpsStatus;
@@ -1076,6 +1274,19 @@ void StartDisplayTask(void *argument)
       if (findPps(g.timeTimer, &ppsAt)) {
         const uint32_t S = DS1307::ds1307_to_unix(g.utc);   // the second the edge started
         nmeaDelayMs = (g.timeTimer - ppsAt) / 1000;
+        {
+          // For timing the DS1307's edges: this edge's second, and TIM2's
+          // counts per second (from the edge before, already checked)
+          const uint32_t n = g_ppsCount.load(std::memory_order_acquire);
+          for (uint32_t i = 1; i < 4 && i < n; ++i)
+            if (g_ppsRing[(n - i) & 3] == ppsAt) {
+              ppsRefPer = ppsAt - g_ppsRing[(n - i - 1) & 3];
+              break;
+            }
+          ppsRefSec = S;
+          ppsRefAt = ppsAt;
+          ppsRef = true;
+        }
         int64_t err = ppsmath::Discipline::kSetUs;          // not set yet: set it
         uint32_t sec, frac, at;
         bool measured = !StmRtc_IsSet();
@@ -1093,7 +1304,7 @@ void StartDisplayTask(void *argument)
             source = RtcSource::GpsPps;
             lastSetUnix = S;
             lastSetTick = tick;
-            dsCopyPending = true;
+            dsCopyPending = dsCopyWanted();
           }
         }
         if (st.shift)
@@ -1110,12 +1321,12 @@ void StartDisplayTask(void *argument)
             lastSetUnix = S;
             lastSetTick = tick;
             StmRtc_NoteSource(RtcSource::GpsPps, S);
-            dsCopyPending = true;           // the DS1307 follows, hourly
+            dsCopyPending = dsCopyWanted(); // the DS1307 follows, hourly (with SQW: when it wanders)
           }
         }
       }
     }
-    const bool ppsActive = havePps && (tick - lastPpsTick) < PPS_TIMEOUT_MS;
+    ppsActive = havePps && (tick - lastPpsTick) < PPS_TIMEOUT_MS;
     if (havePps && !ppsActive) {
       havePps = false;                      // PPS lost: NMEA timing from here, the loop starts over
       disc.restart();
@@ -1159,9 +1370,33 @@ void StartDisplayTask(void *argument)
       }
     }
     // 3. After a power cycle: the DS1307's time (whole seconds), until better comes
+    //    With the SQW checked: from a labelled edge, corrected by the offset
+    //    and drift kept in its RAM. Without: whole seconds, +0.5 s.
     else if (!StmRtc_IsSet() && dsOk && ds1307.running()) {
-      if (StmRtc_Set(DS1307::ds1307_to_unix(ds), 0x80000000u, RtcSource::Ds1307))   // +0.5 s: its phase is unknown
-        source = RtcSource::Ds1307;
+      const bool waitedOut = (tick - dsFirstOkTick) >= SQW_WAIT_MS;
+      const bool fresh = haveLabel && (tick - labelTick) < 2000u;
+      if (labels.verified() && fresh && sqwActive && (ramRead || waitedOut)) {
+        const bool measured = haveRec && rec.refUnix != 0;
+        const int64_t edgeUtcUs = measured ? dsref::utcAtEdgeUs(rec, label) : (int64_t)label * 1000000;
+        const int64_t nowUs = edgeUtcUs + (int64_t)(uint32_t)(TIM2->CNT - labelAt);
+        const uint32_t sec = (uint32_t)(nowUs / 1000000);
+        const uint32_t frac = (uint32_t)(((uint64_t)(nowUs % 1000000) << 32) / 1000000u);
+        if (StmRtc_Set(sec, frac, RtcSource::Ds1307)) {
+          source = RtcSource::Ds1307;
+          seededFromSqw = true;
+          if (measured && sec - rec.refUnix < NTP_HOLDOVER_S) {
+            // Holding over: the DS1307 carried the PPS's time across the power cycle
+            ntpServer.setReference(1, NtpServer::refIdAscii("PPS"), NtpServer::fromUnix(rec.refUnix, 0), 0,
+                                   DS_ROOT_DISPERSION_US);
+            ntpSynced = true;
+            lastSetUnix = rec.refUnix;
+          }
+        }
+      } else if (labels.mismatch() || waitedOut) {
+        // No usable SQW (after giving it SQW_WAIT_MS to show itself)
+        if (StmRtc_Set(DS1307::ds1307_to_unix(ds), 0x80000000u, RtcSource::Ds1307))   // +0.5 s: its phase is unknown
+          source = RtcSource::Ds1307;
+      }
     }
 
     // The STM32 RTC is the clock from here on
@@ -1185,8 +1420,21 @@ void StartDisplayTask(void *argument)
       }
     }
     if (dsWriting && ds1307.setStatus() != DS1307::ds1307_set_status_t::Pending) {
-      if (ds1307.setStatus() == DS1307::ds1307_set_status_t::Failed)
+      if (ds1307.setStatus() == DS1307::ds1307_set_status_t::Failed) {
         dsCopyPending = true;    // try again at the next second
+      } else {
+        // Its divider restarted: a new phase, measured afresh. Until then
+        // the RAM says the offset is unknown (the drift stays).
+        meter.restart();
+        labels.restart();
+        haveLabel = false;
+        savedThisRun = false;
+        if (haveRec) {
+          rec.refUnix = 0;
+          rec.offsetUs = 0;
+          recDirty = true;
+        }
+      }
       dsWriting = false;
     }
 
@@ -1204,9 +1452,11 @@ void StartDisplayTask(void *argument)
       const NtpServer::Stats ns = ntpServer.stats();
       char calText[12];
       formatPpm(calText, sizeof(calText), disc.calPpb());
+      char dsDrift[12];
+      formatPpm(dsDrift, sizeof(dsDrift), rec.driftPpb);
       snprintf(msg, sizeof(msg),
                "RTC %04u-%02u-%02u %02u:%02u:%02u UTC (%s) | DS1307 %s | GPS %s sats=%u cfg=%s | %s | NTP %s req=%lu rep=%lu"
-               " | PPS %s err=%ldus cal=%sppm nmea=%lums%s\r\n",
+               " | PPS %s err=%ldus cal=%sppm nmea=%lums | SQW %s%s off=%ldus drift=%sppm/%lus%s\r\n",
                now.year, now.month, now.day, now.hour, now.minute, now.second,
                source == RtcSource::GpsPps ? "PPS" : source == RtcSource::Gps ? "GPS"
                  : source == RtcSource::Network ? "network" : source == RtcSource::Ds1307 ? "DS1307" : "not set",
@@ -1214,7 +1464,10 @@ void StartDisplayTask(void *argument)
                !g.alive ? "no data" : (g.fix ? "fix" : "no fix"), g.satellites, configName(g.config), ethLine,
                ntpSynced ? "synced" : "unsynced", (unsigned long)ns.requests, (unsigned long)ns.replies,
                !ppsActive ? "none" : (disc.locked() ? "locked" : "locking"), (long)lastPpsErrUs, calText,
-               (unsigned long)nmeaDelayMs, oled.failed() ? " | SSD1306 not responding" : "");
+               (unsigned long)nmeaDelayMs,
+               !sqwActive ? "none" : labels.mismatch() ? "MISMATCH" : labels.verified() ? "ok" : "checking",
+               dsAgree ? "" : " DISAGREE", (long)dsOffsetUs, dsDrift, (unsigned long)rec.spanS,
+               oled.failed() ? " | SSD1306 not responding" : "");
       debugPrint(msg);
     }
 
@@ -1224,7 +1477,8 @@ void StartDisplayTask(void *argument)
       redrawPending = false;
       ClockTime lastSet;
       DS1307::ds1307_from_unix(lastSetUnix, &lastSet);
-      drawScreen(oled, clockSet, now, g, ethLine, source, lastSet, dsOk, ppsActive && disc.locked(), disc.calPpb());
+      drawScreen(oled, clockSet, now, g, ethLine, source, lastSet, dsOk, ppsActive && disc.locked(), disc.calPpb(),
+                 seededFromSqw);
       oled.requestFlush();
     }
 
