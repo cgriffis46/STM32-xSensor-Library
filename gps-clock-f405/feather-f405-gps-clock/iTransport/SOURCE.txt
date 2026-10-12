@@ -1,0 +1,55 @@
+Vendored from https://github.com/cgriffis46/Claude-iTransport
+commit 1f091b5 (main, 2026-10-11; MIT, see iTransport/LICENSE). The files
+first copied at 94c4089 are identical at 1f091b5.
+
+Copied unchanged; only the files this example needs:
+
+  iTransport/inc, src            <- iTransport/itransport/inc, src
+                                    (BusTransport, I2CTransport, SPITransport,
+                                    SpiBlockTransport, OneWireUartTransport, DebugLog,
+                                    ISensorTransport, iBlockTransport, iTransport,
+                                    iTransportOneWire)
+  iTransport/hw/freertos/inc     <- iTransport/itransport/hw/freertos/inc (FreeRtosTransport)
+  iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
+                                    (Stm32HalI2CTransport, Stm32HalUartTransport,
+                                    Stm32HalSpiBlockTransport and the HAL I2C/UART/SPI
+                                    interrupt callbacks)
+  isensor/inc                    <- isensor/inc/SensorStateMachine.h
+  isensor/nmea                   <- isensor/nmea (NmeaParser, ByteRing)
+  isensor/mtk3339                <- isensor/mtk3339
+  isensor/ds1307                 <- isensor/ds1307 (inc, src); in review as
+                                    cgriffis46/Claude-iTransport#34 (branch
+                                    claude/ds1307-w5500-ntp), the same code as a3cd530
+                                    (with readRam()/writeRam())
+  iDisplay/inc, src              <- iDisplay/inc, src (MonoCanvas, iTextSurface, Font5x7, iDisplayDevice)
+  iDisplay/ssd1306               <- iDisplay/ssd1306
+  iNetTransport/inc              <- iNetTransport/inc (NetTypes, iNetDevice)
+  iNetTransport/w5500            <- iNetTransport/w5500 (inc, src)
+  iNetTransport/dhcp, dns, sntp  <- iNetTransport/dhcp, dns, sntp (inc, src)
+  iNetTransport/inc/iUdpResponder.h, w5500 (the UDP responder) and
+  sntp/NtpServer                 <- commit 79ad384 on the branch
+                                    claude/w5500-udp-responder, on top of 1f091b5; in review as
+                                    cgriffis46/Claude-iTransport#34 (with the ds1307 driver)
+  iNetTransport/hw/freertos      <- iNetTransport/hw/freertos (xNetInterface, xEthernet, xClient)
+
+OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it,
+and SPITransport because Stm32SpiItCallbacks.cpp includes it.
+
+This copy is the same as gps-clock/stm32-gps-clock-example's (the L432
+example). isensor/ds1307 is here only for its date helpers (ds1307_to_unix
+and the rest); this board has a DS3231, read by Core/Inc/rtc_probe.h.
+
+From ST (BSD-3; each folder has its LICENSE.md), only the files used:
+  Drivers/STM32F4xx_HAL_Driver   STMicroelectronics/stm32f4xx_hal_driver at 1f6451c
+                                 (release notes: V1.8.5)
+  Drivers/CMSIS/Device/ST/STM32F4xx, Core/Src/system_stm32f4xx.c,
+  Core/Startup/startup_stm32f405rgtx.s (startup_stm32f405xx.s)
+                                 STMicroelectronics/cmsis_device_f4 at 9192c7b (V2.6.11)
+  Middlewares/ST/STM32_USB_Device_Library (Core, Class/CDC)
+                                 STMicroelectronics/stm32_mw_usb_device v2.11.6 (2df324b)
+  USB_DEVICE/App/usbd_desc.c/.h  from that library's usbd_desc_template.c/.h
+Drivers/CMSIS/Include and Middlewares/Third_Party/FreeRTOS are the L432
+example's (the same Cortex-M4F port).
+
+To update: copy the same files from a newer Claude-iTransport commit and
+change the commit above. Fix bugs in Claude-iTransport, not here.
