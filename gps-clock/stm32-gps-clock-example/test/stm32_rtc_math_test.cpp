@@ -76,6 +76,8 @@ int main() {
 		check(rtcmath::shiftSubFs(0x00040000u, 4095) == 0, "under half a step: no shift");
 		check(rtcmath::shiftSubFs(0xFFFFFFFFu, 4095) == 0, "a whole second, rounded: no shift (the caller adds the second)");
 		check(rtcmath::precisionLog2(4095) == -12 && rtcmath::precisionLog2(255) == -8, "precision -12 at 4096 steps, -8 at 256");
+		check(rtcmath::precisionLog2(8191) == -13 && rtcmath::shiftSubFs(0x80000000u, 8191) == 4096,
+		      "PREDIV_S 8191 (main.cpp's): precision -13, half a second is SUBFS 4096");
 
 		// Set at T + 0.3 s, as StmRtc_Set does: whole second, then the shift.
 		bool good = true;

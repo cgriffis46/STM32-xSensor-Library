@@ -2,7 +2,7 @@
  * stm32_rtc.h
  *
  *  The STM32L432's own RTC as the board's clock: kept in UTC, on the LSE
- *  watch crystal, with PREDIV_S + 1 = 4096 sub-second steps (244 us).
+ *  watch crystal, with PREDIV_S + 1 = 8192 sub-second steps (122 us).
  *  Set from GPS (or network) time, it is what the display shows and what
  *  the NTP server serves.
  *
@@ -59,7 +59,7 @@ void StmRtc_NoteSource(RtcSource source, uint32_t unixSeconds);
 // The last set recorded in the backup registers (survives a reset).
 bool StmRtc_LastSet(RtcSource *source, uint32_t *unixSeconds);
 
-// Resolution as a power of two in seconds (-12 for 1/4096 s), for NTP.
+// Resolution as a power of two in seconds (-13 for 1/8192 s), for NTP.
 int8_t StmRtc_PrecisionLog2(void);
 
 #endif /* STM32_RTC_H_ */

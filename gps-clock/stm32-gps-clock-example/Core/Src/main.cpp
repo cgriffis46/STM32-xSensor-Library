@@ -125,10 +125,13 @@ typedef struct {
 #define DS1307_SET_WINDOW_MS    100UL
 
 // The STM32 RTC: LSE 32768 Hz / (PREDIV_A + 1) / (PREDIV_S + 1) = 1 Hz,
-// with PREDIV_S + 1 = 4096 sub-second steps (244 us, NTP precision -12)
-#define RTC_ASYNCH_PREDIV       7
-#define RTC_SYNCH_PREDIV        4095
-#define NTP_PRECISION_LOG2      (-12)
+// with PREDIV_S + 1 = 8192 sub-second steps (122 us, NTP precision -13).
+// PREDIV_A 3 is the smallest that keeps smooth calibration's CALP usable
+// (CALP must stay 0 when PREDIV_A < 3: RM0394's smooth calibration section
+// as quoted on ST's community forum, not read in the manual here).
+#define RTC_ASYNCH_PREDIV       3
+#define RTC_SYNCH_PREDIV        8191
+#define NTP_PRECISION_LOG2      (-13)
 
 // How late an NMEA RMC sentence is relative to the second it names. The GPS
 // time is applied with this much added. Measure it (against the module's PPS
@@ -143,7 +146,7 @@ typedef struct {
 
 // PPS: TIM2 counts at 1 MHz (80 MHz / 80) and latches the PPS edge on PA0
 #define PPS_TIMER_PRESCALER     79
-#define PPS_ROOT_DISPERSION_US  1000UL     // locked: the RTC's 244 us step and the loop's 400 us band
+#define PPS_ROOT_DISPERSION_US  1000UL     // locked: the RTC's 122 us step and the loop's 250 us band
 #define PPS_TIMEOUT_MS          3000UL     // no PPS paired with an RMC for this long: back to NMEA timing
 
 // Ethernet address: DHCP, or this static one
@@ -690,7 +693,25 @@ static void MX_RTC_Init(void)
   // power): keep it. Year 00 leaves INITS clear, so the default below
   // reads as "not set" (StmRtc_IsSet()) until GPS, network or DS1307 time.
   if (__HAL_RTC_IS_CALENDAR_INITIALIZED(&hrtc))
+  {
+    // HAL_RTC_Init() leaves a running calendar alone, prescalers too. An
+    // RTC set by firmware with other prescalers gets these now: the date
+    // and time stay, the second restarts (PPS or GPS puts the phase right).
+    const uint32_t prer = ((uint32_t)RTC_ASYNCH_PREDIV << RTC_PRER_PREDIV_A_Pos) | RTC_SYNCH_PREDIV;
+    if (hrtc.Instance->PRER != prer)
+    {
+      __HAL_RTC_WRITEPROTECTION_DISABLE(&hrtc);
+      if (RTC_EnterInitMode(&hrtc) == HAL_OK)
+      {
+        hrtc.Instance->PRER = RTC_SYNCH_PREDIV;
+        hrtc.Instance->PRER |= (uint32_t)RTC_ASYNCH_PREDIV << RTC_PRER_PREDIV_A_Pos;
+        (void)RTC_ExitInitMode(&hrtc);
+      }
+      __HAL_RTC_WRITEPROTECTION_ENABLE(&hrtc);
+      hrtc.State = HAL_RTC_STATE_READY;
+    }
     return;
+  }
   /* USER CODE END Check_RTC_BKUP */
 
   /** Initialize RTC and set the Time and Date

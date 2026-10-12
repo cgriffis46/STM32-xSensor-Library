@@ -9,7 +9,7 @@ STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combine
 | MTK3333 GPS (e.g. CDtop PA1616D, Quectel L80/L86) | `isensor/mtk3339`: `xmtk3339<Stm32HalUartTransport>` | USART1, 9600 baud |
 | W5500 Ethernet (WIZ850io, W5500-Lite, ...) | `iNetTransport/w5500`: `w5500<Stm32HalSpiBlockTransport>` behind `xEthernet` | SPI1 with DMA, 10 MHz |
 | NTP server | `iNetTransport/sntp`: `NtpServer`, on the W5500's UDP responder (socket 6) | UDP port 123 |
-| STM32 RTC | `Core/Src/stm32_rtc.cpp` | LSE, PREDIV 7/4095 |
+| STM32 RTC | `Core/Src/stm32_rtc.cpp` | LSE, PREDIV 3/8191 |
 | GPS PPS (optional) | `Core/Inc/pps_math.h`, TIM2 input capture | PA0 (A0) |
 
 The drivers are the non-blocking ones from
@@ -24,7 +24,7 @@ commands.
 Time flows GPS -> STM32 RTC -> DS1307, and the NTP server serves the STM32 RTC:
 
 * Once the GPS has a fix, its UTC time is applied to the STM32L432's own RTC (on
-  the LSE crystal, 1/4096 s resolution) to a fraction of a second, then copied to
+  the LSE crystal, 1/8192 s resolution) to a fraction of a second, then copied to
   the DS1307 at the start of the next second. Re-synced every hour.
 * The display shows the STM32 RTC.
 * The W5500 gets an address by DHCP (shown on the display) and answers NTP
@@ -213,10 +213,11 @@ Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`
 * Without PPS, NTP accuracy is limited by the GPS's NMEA timing: the RMC sentence
   arrives some 100-500 ms after the second it names, depending on the module and
   baud rate. Set `GPS_NMEA_DELAY_MS` (measure it with PPS: `nmea=` in the debug
-  line). With PPS the limit is the RTC's 244 us step and the loop's 400 us band.
+  line). With PPS the limit is the RTC's 122 us step and the loop's 250 us band
+  (simulated: within 0.2-0.3 ms of the PPS after 6 hours).
 * The PPS pin and its pairing with RMC haven't been tried on a module.
 * The .ioc was edited by hand for SPI1, DMA, the W5500 pins, the 80 MHz clock,
-  the RTC (LSE, PREDIV 7/4095), `rtc_mutex`, TIM2 input capture on PA0 and the
+  the RTC (LSE, PREDIV 3/8191), `rtc_mutex`, TIM2 input capture on PA0 and the
   third task. Open it in CubeMX and check it before generating code over
   this project.
 * The clock setup expects the LSE crystal (X2, fitted on the NUCLEO-L432KC).

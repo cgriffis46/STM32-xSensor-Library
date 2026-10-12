@@ -113,8 +113,9 @@ inline int32_t driftPpb(int64_t err0Us, int64_t err1Us, uint32_t seconds) {
 // some other way) means set the RTC outright; above shiftUs, shift it away.
 // Frequency: every freqSeconds the drift since the last look (corrections
 // taken out) adjusts the smooth calibration, if it is half a ppm or more.
-// The measurement is quantised to the RTC's sub-second step (244 us), so
-// shiftUs sits above it and freqSeconds is long enough to see 0.5 ppm.
+// The measurement is quantised to the RTC's sub-second step (122 us with
+// PREDIV_S 8191), so shiftUs sits two steps above it and freqSeconds is
+// long enough to see 0.5 ppm.
 class Discipline {
 public:
 	struct Step {
@@ -126,7 +127,7 @@ public:
 	};
 
 	static const int64_t kSetUs = 200000;
-	static const int64_t kShiftUs = 400;
+	static const int64_t kShiftUs = 250;
 	static const int64_t kLockUs = 1000;
 	static const uint32_t kFreqSeconds = 1024;
 	static const int32_t kMinCalChangePpb = 500;
