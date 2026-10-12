@@ -1,0 +1,44 @@
+Vendored from https://github.com/cgriffis46/Claude-iTransport
+commit 530961a (main, 2026-10-12; MIT, see iTransport/LICENSE).
+
+Copied unchanged; only the files this example needs:
+
+  iTransport/inc, src            <- iTransport/itransport/inc, src
+                                    (iTransport, ISensorTransport, iTransportOneWire,
+                                    BusTransport, OneWireUartTransport, DebugLog)
+  iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
+                                    (Stm32HalUartTransport and the HAL UART
+                                    interrupt callbacks)
+  isensor/inc                    <- isensor/inc/SensorStateMachine.h
+  isensor/nmea                   <- isensor/nmea (NmeaParser, ByteRing)
+  isensor/teseo                  <- isensor/teseo (teseo, xteseo, Pstm)
+  isensor/ds1307                 <- isensor/ds1307 (inc/ds1307.h, src); only for
+                                    its date helpers (ds1307_to_unix and the rest)
+  iNetTransport/inc              <- iNetTransport/inc (NetTypes, iUdpResponder)
+  iNetTransport/sntp             <- iNetTransport/sntp (NtpServer only)
+
+OneWireUartTransport and BusTransport are only here because
+Stm32UartItCallbacks.cpp calls the 1-Wire transport.
+
+From ST (BSD-3; each folder has its licence), only the files used:
+  Drivers/STM32F2xx_HAL_Driver   STMicroelectronics/stm32f2xx_hal_driver at 515825e
+                                 (release notes: V1.2.9)
+  Drivers/CMSIS/Device/ST/STM32F2xx, Core/Src/system_stm32f2xx.c,
+  Core/Startup/startup_stm32f207zgtx.s (startup_stm32f207xx.s)
+                                 STMicroelectronics/cmsis_device_f2 at 49321f1 (V2.2.6)
+  Core/Inc/stm32f2xx_hal_conf.h, LWIP/Target/ethernetif.c (adapted; see its header)
+                                 STM32CubeF2's NUCLEO-F207ZG LwIP_HTTP_Server_Netconn_RTOS
+                                 example
+  Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3
+                                 FreeRTOS-Kernel V10.3.1 (the same release as the
+                                 rest of the FreeRTOS folder, which is the L432 and
+                                 F405 examples', with CMSIS-RTOS2's wrapper)
+Middlewares/Third_Party/LwIP     lwIP 2.2.1 (lwip-tcpip/lwip, STABLE-2_2_1_RELEASE,
+                                 77dcd25; BSD, see COPYING): src/core, src/core/ipv4,
+                                 src/api, src/netif/ethernet.c, src/include, and its
+                                 FreeRTOS port (contrib/ports/freertos) in system/;
+                                 system/arch/cc.h is this project's
+Drivers/CMSIS/Include is the L432 and F405 examples' (ARM's CMSIS 5 core headers).
+
+To update: copy the same files from a newer Claude-iTransport commit and
+change the commit above. Fix bugs in Claude-iTransport, not here.
