@@ -70,6 +70,12 @@
 									<listOptionValue builtIn="false" value="../isensor/nmea/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/mtk3339/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/w5500/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dhcp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dns/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/sntp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/hw/freertos/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/ssd1306/inc"/>
 								</option>
@@ -94,6 +100,12 @@
 									<listOptionValue builtIn="false" value="../isensor/nmea/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/mtk3339/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/w5500/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dhcp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dns/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/sntp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/hw/freertos/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/ssd1306/inc"/>
 								</option>
@@ -135,6 +147,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iTransport"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iDisplay"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iNetTransport"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -203,6 +216,12 @@
 									<listOptionValue builtIn="false" value="../isensor/nmea/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/mtk3339/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/w5500/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dhcp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dns/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/sntp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/hw/freertos/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/ssd1306/inc"/>
 								</option>
@@ -227,6 +246,12 @@
 									<listOptionValue builtIn="false" value="../isensor/nmea/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/mtk3339/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/w5500/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dhcp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/dns/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/sntp/inc"/>
+									<listOptionValue builtIn="false" value="../iNetTransport/hw/freertos/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
 									<listOptionValue builtIn="false" value="../iDisplay/ssd1306/inc"/>
 								</option>
@@ -267,6 +292,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iTransport"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iDisplay"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iNetTransport"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

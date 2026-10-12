@@ -1,15 +1,19 @@
 Vendored from https://github.com/cgriffis46/Claude-iTransport
-commit 94c408947e37d006876e6cd7960c81354a84cea3 (MIT, see iTransport/LICENSE)
+commit 1f091b5 (main, 2026-10-11; MIT, see iTransport/LICENSE). The files
+first copied at 94c4089 are identical at 1f091b5.
 
 Copied unchanged; only the files this example needs:
 
   iTransport/inc, src            <- iTransport/itransport/inc, src
-                                    (BusTransport, I2CTransport, OneWireUartTransport,
-                                    DebugLog, ISensorTransport, iTransport, iTransportOneWire)
+                                    (BusTransport, I2CTransport, SPITransport,
+                                    SpiBlockTransport, OneWireUartTransport, DebugLog,
+                                    ISensorTransport, iBlockTransport, iTransport,
+                                    iTransportOneWire)
   iTransport/hw/freertos/inc     <- iTransport/itransport/hw/freertos/inc (FreeRtosTransport)
   iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
-                                    (Stm32HalI2CTransport, Stm32HalUartTransport and the
-                                    HAL I2C/UART interrupt callbacks)
+                                    (Stm32HalI2CTransport, Stm32HalUartTransport,
+                                    Stm32HalSpiBlockTransport and the HAL I2C/UART/SPI
+                                    interrupt callbacks)
   isensor/inc                    <- isensor/inc/SensorStateMachine.h
   isensor/nmea                   <- isensor/nmea (NmeaParser, ByteRing)
   isensor/mtk3339                <- isensor/mtk3339
@@ -18,8 +22,17 @@ Copied unchanged; only the files this example needs:
                                     in Claude-iTransport's main
   iDisplay/inc, src              <- iDisplay/inc, src (MonoCanvas, iTextSurface, Font5x7, iDisplayDevice)
   iDisplay/ssd1306               <- iDisplay/ssd1306
+  iNetTransport/inc              <- iNetTransport/inc (NetTypes, iNetDevice)
+  iNetTransport/w5500            <- iNetTransport/w5500 (inc, src)
+  iNetTransport/dhcp, dns, sntp  <- iNetTransport/dhcp, dns, sntp (inc, src)
+  iNetTransport/hw/freertos      <- iNetTransport/hw/freertos (xNetInterface, xEthernet, xClient)
 
-OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it.
+OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it,
+and SPITransport because Stm32SpiItCallbacks.cpp includes it.
+
+Also added, from ST (BSD-3): Drivers/STM32L4xx_HAL_Driver stm32l4xx_hal_spi.c/.h
+and stm32l4xx_hal_spi_ex.c/.h from STMicroelectronics/stm32l4xx_hal_driver
+v1.13.6, the HAL version already in the project.
 
 To update: copy the same files from a newer Claude-iTransport commit and
 change the commit above. Fix bugs in Claude-iTransport, not here.
