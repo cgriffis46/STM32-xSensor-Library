@@ -22,6 +22,9 @@ SHT31 fetching at the chip's rate, and a break before its soft reset at
 start up:
   isensor/sht31                  <- isensor/sht31 (inc, src)
 
+From commit 35cfc4f (main), for the BME680:
+  isensor/bme680                 <- isensor/bme680 (inc: bme680.h, xbme680.h; src)
+
 OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it.
 
 From ST (BSD-3): Drivers/STM32L4xx_HAL_Driver is STMicroelectronics/stm32l4xx_hal_driver
