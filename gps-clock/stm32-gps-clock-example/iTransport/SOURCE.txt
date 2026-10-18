@@ -9,7 +9,7 @@ Copied unchanged; only the files this example needs:
                                     DebugLog)
   iTransport/hw/freertos/inc     <- iTransport/itransport/hw/freertos/inc (FreeRtosTransport)
   iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
-                                    (Stm32HalI2CTransport, Stm32HalUartTransport and
+                                    (Stm32HalI2CTransport, Stm32HalUartTransport, Stm32DebugPort and
                                     the HAL I2C and UART interrupt callbacks)
   isensor/inc                    <- isensor/inc/SensorStateMachine.h
   isensor/ds1307                 <- isensor/ds1307 (inc, src)

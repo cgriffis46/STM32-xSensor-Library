@@ -21,6 +21,12 @@ W5500, NTP server, PPS discipline) is in this repository's history at commit
 | GND | **GND** | | |
 | SQW (or SQW/OUT) | **A1** | PA1, TIM2_CH2 | optional; needs a 10k pull-up to **3V3** |
 
+| Debug log | Nucleo pin | MCU pin | |
+|-----------|------------|---------|---|
+| TX out | **D5** | PB6, USART1_TX | to a 3.3 V USB-serial adapter's **RX**, or a Saleae channel; 921600 8N1 |
+| GND | **GND** | | the adapter's GND |
+| (RX in) | D4 | PB7, USART1_RX | not used; leave it open (it is pulled up) |
+
 * **I2C pull-ups.** SDA and SCL need pull-ups. Most DS1307 boards fit them
   (often 3.3k-10k) to the board's VCC, which is 5 V here. PA9 and PA10 are
   5 V tolerant, and the DS1307 reads 3.3 V as high, so this works (general
@@ -32,7 +38,10 @@ W5500, NTP server, PPS discipline) is in this repository's history at commit
   through a power cycle. Many "Tiny RTC" boards charge a rechargeable LIR2032
   through a diode and resistor; with a plain CR2032 in one, remove that
   charging path, or the cell can be damaged (general knowledge).
-* **The Nucleo pins.** D0/D1 = PA10/PA9 and A1 = PA1 are from memory of
+* **The debug adapter must be 3.3 V logic** (an FTDI/CP2102/CH340 cable set
+  to 3.3 V). A 5 V adapter's TX would drive D4; with D4 left open that is not
+  a problem, but don't connect a 5 V TX anywhere.
+* **The Nucleo pins.** D0/D1 = PA10/PA9, D4/D5 = PB7/PB6 and A1 = PA1 are from memory of
   ST's UM1956, not checked here. The console is USART2 (PA2/PA15) on the
   ST-LINK's virtual COM port, so D0/D1 are free.
 
@@ -64,6 +73,35 @@ W5500, NTP server, PPS discipline) is in this repository's history at commit
 5. At start-up the board reads a start counter from the DS1307's
    battery-backed RAM, adds one and writes it back. A count that keeps rising
    across a power cycle shows that the RAM, and so the battery, works.
+
+### The debug log (D5)
+
+Open the USB-serial adapter at **921600 8N1**, or put the Saleae's async serial
+analyser on D5 at that rate. Each line is `<seq> <ms> <tag> <what> [<value>...]`
+(Claude-iTransport's `DebugLog.h`, at `ITRANSPORT_DEBUG` 2: the define is in
+the project's settings, C and C++). For example:
+
+    0 3 app start 4096 1077
+    1 4 ds1307 st 0 1
+    2 5 ds1307 st 1 2
+    ...
+    18 1004 app sqw-fall 1004213 0
+    19 1031 app tick 57 980114 1031502
+
+* `ds1307 st <from> <to>`: the driver's state changes (the numbers are
+  `ds1307_state_t`: 0 init, 1 control, 3 done, 4 read, 12 error...).
+  `ds1307 fail`, `bus xfer-fail` and `bus-err` are I2C faults.
+* `app start <rev> <dev>`: the chip's revision and device IDs.
+* `app sqw-fall <TIM2 us> <period us>`: each SQW falling edge.
+* `app tick <second> <from> <to>`: the TIM2 bracket of each seconds change.
+* `app cmd <char>`, `app set <status>` and `app ram-count <n> <kept>`: the
+  console's doings.
+
+A gap in `seq` means lines were dropped because the 1 KB ring was full. A
+capture of D5 (async serial, then exported as CSV) goes through
+`python3 tools/saleae/saleae_log.py --serial s.csv` in Claude-iTransport.
+Set `ITRANSPORT_DEBUG` to 3 for every I2C transfer as well (about 20 lines a
+second here), or to 0 to turn the log off.
 
 ### Commands
 
@@ -102,7 +140,8 @@ don't. The export formats the tool reads haven't met a real export yet.
   * follows the SQW edges;
   * prints the status line.
 * **consoleTask:** hands the console ring to USART2 through
-  `Stm32HalUartTransport`, which also takes the keys.
+  `Stm32HalUartTransport`, which also takes the keys, and calls `dbg::poll()`,
+  which sends the debug log's ring to USART1.
 * **TIM2** runs free at 1 MHz and latches both SQW edges on PA1 in hardware.
 * **The system clock** is 80 MHz (MSI + PLL, trimmed by the LSE crystal X2).
   Without the LSE, `SystemClock_Config()` stops in `Error_Handler()`.
@@ -117,8 +156,9 @@ DS1307 driver's own `ds1307_test` is in Claude-iTransport.
 ## Not verified
 
 * Not run on the board yet. Built with arm-none-eabi-gcc 13 using the CubeIDE
-  flags, without warnings: 47 KB flash at -Os (76 KB at -O0) and 26 KB RAM.
-* The `.ioc` was edited by hand to match: I2C1, USART2 (with its interrupt),
+  flags, without warnings: 48.5 KB flash at -Os (79 KB at -O0) and 26 KB RAM.
+* The `.ioc` was edited by hand to match: I2C1, USART1 (921600, PB6/PB7),
+  USART2 (with its interrupt),
   TIM2 channel 2 on both edges, LD3, and the two tasks and mutexes. Open it in
   CubeMX and check it before generating code over the project.
 * The DS1307's control value (0x10 for 1 Hz) and its register layout are from

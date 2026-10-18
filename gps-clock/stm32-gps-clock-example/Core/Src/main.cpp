@@ -21,6 +21,13 @@
   *  SQW and the I2C lines gives the precise answer
   *  (Claude-iTransport's tools/saleae/saleae_log.py --rtc-edge).
   *
+  *  A debug log (Claude-iTransport's DebugLog.h, at ITRANSPORT_DEBUG 2, set
+  *  in the project's defines) goes out on USART1 TX, D5 (PB6), at 921600
+  *  8N1: the driver's state changes and I2C faults ("ds1307", "bus"), and
+  *  this application's events ("app"). Read it with a 3.3 V USB-serial
+  *  adapter or the Saleae's async serial analyser; Claude-iTransport's
+  *  tools/saleae/saleae_log.py turns a capture into a timeline.
+  *
   *  The full GPS clock (GPS, OLED, W5500, NTP, PPS) that this project was
   *  is in the repository's history, at commit eb4b352.
   *
@@ -30,6 +37,7 @@
   *    TIM2_CH2  PA1  (A1)  <- DS1307 SQW/OUT (optional; 10k pull-up to 3.3 V)
   *    5V, GND              -> DS1307 VCC (5 V), GND
   *    USART2    PA2/PA15   <> ST-LINK virtual COM port (the USB cable)
+  *    USART1_TX PB6  (D5)  -> debug log, 921600 8N1 (USART1_RX PB7, D4, unused)
   *    LD3       PB3        green LED: toggles on each DS1307 second
   ******************************************************************************
   * @attention
@@ -57,6 +65,8 @@
 #include <atomic>
 #include "Stm32HalI2CTransport.h"
 #include "Stm32HalUartTransport.h"
+#include "Stm32DebugPort.h"
+#include "DebugLog.h"
 #include "xds1307.h"
 #include "rtc_edge.h"
 /* USER CODE END Includes */
@@ -84,6 +94,9 @@ typedef DS1307::ds1307_time_t ClockTime;
 #define RAM_MAGIC0              'D'
 #define RAM_MAGIC1              'S'
 
+// The debug log's UART (USART1): fast, since level 2 logs every state change
+#define DEBUG_BAUD              921600
+
 #define CONSOLE_RING            2048
 #define CONSOLE_LINE            48
 /* USER CODE END PD */
@@ -98,6 +111,7 @@ I2C_HandleTypeDef hi2c1;
 
 TIM_HandleTypeDef htim2;
 
+UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* Definitions for rtcTask */
@@ -148,6 +162,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartRtcTask(void *argument);
 void StartConsoleTask(void *argument);
@@ -303,9 +318,15 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_I2C1_Init();
+  MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
+  // The debug log on USART1: lines queue in a ring from here on, and
+  // consoleTask's dbg::poll() sends them
+  static Stm32HalUartTransport debugUart(&huart1);
+  dbg::begin(&debugUart, Stm32DebugPort::port());
+  DBG_EVENT("app", "start", (int32_t) HAL_GetREVID(), (int32_t) HAL_GetDEVID());
   HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);   // SQW, both edges; TIM2 free-running at 1 MHz
   /* USER CODE END 2 */
 
@@ -524,6 +545,41 @@ static void MX_TIM2_Init(void)
 }
 
 /**
+  * @brief USART1 Initialization Function (the debug log, D5/D4)
+  * @param None
+  * @retval None
+  */
+static void MX_USART1_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART1_Init 0 */
+
+  /* USER CODE END USART1_Init 0 */
+
+  /* USER CODE BEGIN USART1_Init 1 */
+
+  /* USER CODE END USART1_Init 1 */
+  huart1.Instance = USART1;
+  huart1.Init.BaudRate = DEBUG_BAUD;
+  huart1.Init.WordLength = UART_WORDLENGTH_8B;
+  huart1.Init.StopBits = UART_STOPBITS_1;
+  huart1.Init.Parity = UART_PARITY_NONE;
+  huart1.Init.Mode = UART_MODE_TX_RX;
+  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart1.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
+  if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART1_Init 2 */
+
+  /* USER CODE END USART1_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function (the ST-LINK virtual COM port)
   * @param None
   * @retval None
@@ -623,6 +679,7 @@ void StartRtcTask(void *argument)
   param.period_ms = DS1307_READ_PERIOD_MS;
   param.sqw = DS1307_SQW_MODE;
   static Ds1307Clock rtc(param, &hi2c1, DS1307_ADDR, i2c1_mutexHandle);
+  rtc.setDebugTag("ds1307");               // its state changes and faults in the debug log
 
   printHelp();
 
@@ -682,6 +739,7 @@ void StartRtcTask(void *argument)
           highUs = (int32_t)(at - lastRise);
         lastFall = at;
         ++falls;
+        DBG_EVENT("app", "sqw-fall", (int32_t) at, lastPeriodUs);
       }
     }
     const bool sqwNow = sqwEver && (tick - lastSqwTick) < SQW_TIMEOUT_MS;
@@ -692,6 +750,7 @@ void StartRtcTask(void *argument)
       strcpy(cmd, g_cmd);
       g_cmdReady.store(false, std::memory_order_release);
       consolePrint("> %s\r\n", cmd);
+      DBG_EVENT("app", "cmd", (int32_t) cmd[0]);
       ClockTime set;
       if (cmd[0] == 't' && cmd[1] == ' ') {
         if (parseTime(cmd + 2, &set) && rtc.setTime(set))
@@ -729,12 +788,15 @@ void StartRtcTask(void *argument)
         consolePrint("DS1307 set\r\n");
       else if (lastSet == DS1307::ds1307_set_status_t::Failed)
         consolePrint("DS1307 set FAILED (the I2C write didn't go through)\r\n");
+      DBG_EVENT("app", "set", (int32_t) lastSet);
     }
 
     // A read landed: the time, and the seconds' tick against the SQW edges
     if (rtc.newData() && rtc.getTime(&t)) {
       haveTime = true;
-      an.read(from, to, t.second);         // brackets the tick when the seconds moved on
+      uint32_t tf = 0, tt = 0;
+      if (an.read(from, to, t.second, &tf, &tt))   // brackets the tick when the seconds moved on
+        DBG_EVENT("app", "tick", (int32_t) t.second, (int32_t) tf, (int32_t) tt);
       if (ram == Ram::Idle && !ramCounted) {
         rtc.readRam();
         ram = Ram::Reading;
@@ -766,6 +828,7 @@ void StartRtcTask(void *argument)
         ramOut[5] = (uint8_t)(count >> 24);
         if (rtc.writeRam(0, ramOut, sizeof(ramOut))) {
           ram = Ram::Writing;
+          DBG_EVENT("app", "ram-count", (int32_t) count, known ? 1 : 0);
           consolePrint(known ? "RAM: start %lu (the count was kept: the RAM holds across resets and power cycles)\r\n"
                              : "RAM: no start count yet (new chip, or the battery was out): starting at %lu\r\n",
                        (unsigned long) count);
@@ -863,6 +926,7 @@ void StartConsoleTask(void *argument)
     const uint32_t dropped = g_conDropped;
     osMutexRelease(console_mutexHandle);
 
+    dbg::poll();                           // the debug log, to USART1
     if (len == 0) {
       osDelay(5);
       continue;
