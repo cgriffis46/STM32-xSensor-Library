@@ -37,6 +37,10 @@ SHT31<TTransport>::SHT31(const SHT31_param_t &sht31_param, TArgs&&... transportA
   _update_low_alert=false;
   _break_requested=false;
   _chip_periodic=false;
+  _nextFetchMs=0;
+  _fetchStartMs=0;
+  _slipMs=0;
+  _goodFetches=0;
   _status=0;
 }
 
@@ -132,12 +136,13 @@ void SHT31<TTransport>::main(uint32_t nowMs){
 		if(requestPending()){ // break from periodic mode before any other command
 			enter(sht31_break_state,nowMs);
 		}
-		else if(elapsed(nowMs,sht31_fetch_period_ms)){
+		else if((int32_t)(nowMs-_nextFetchMs)>=0){ // signed: safe across the tick counter's wrap
+			_fetchStartMs=nowMs;
 			enter(sht31_fetch_cmd_state,nowMs);
 		} else {
 			// No longer than sht31_request_poll_ms at a time, so a
 			// request is seen without waiting out the whole period.
-			uint32_t left=sht31_fetch_period_ms-(nowMs-last_update);
+			uint32_t left=_nextFetchMs-nowMs;
 			sleep(left<sht31_request_poll_ms?left:sht31_request_poll_ms);
 		}
 		break;
@@ -207,6 +212,9 @@ void SHT31<TTransport>::main(uint32_t nowMs){
 	case sht31_wait_set_periodic_mode_state:
 		if(landed(nowMs)){
 			_chip_periodic=true;
+			_nextFetchMs=nowMs+fetchPeriodMs(); // the first result, a period from now
+			_slipMs=0;
+			_goodFetches=0;
 			enter(sht31_sleeping_state,nowMs);
 		}
 		break;
@@ -253,12 +261,31 @@ void SHT31<TTransport>::main(uint32_t nowMs){
 		break;
 	case sht31_wait_fetch_state:
 		// The chip does not acknowledge the read when it has nothing
-		// new, so an error here only means try again next time. A chip
-		// that has gone away fails the fetch command before this.
+		// new, so an error here only means try again soon. A chip that
+		// has gone away fails the fetch command before this.
 		if(finished(nowMs)){
 			if(this->lastOpFailed()){
+				const uint32_t period=fetchPeriodMs();
+				uint32_t retry=period/10;
+				if(retry<sht31_fetch_retry_min_ms) retry=sht31_fetch_retry_min_ms;
+				_nextFetchMs=nowMs+retry;
+				// Too early: the chip's clock is slower than ours. Wait 1 %
+				// longer from now on (6 % at most).
+				const uint32_t step=period/100>0?period/100:1;
+				if(_slipMs+step<=period*6/100) _slipMs+=step;
+				_goodFetches=0;
 				enter(sht31_sleeping_state,nowMs);
 			} else if(convert()){
+				// A period from when this fetch started, not from now, so
+				// the time the transfers take doesn't add up
+				_nextFetchMs=_fetchStartMs+fetchPeriodMs()+_slipMs;
+				// Now and then try 0.1 % sooner again, so the period doesn't
+				// stay longer than the chip's and lose results
+				if(++_goodFetches>=sht31_slip_decay_fetches){
+					_goodFetches=0;
+					const uint32_t dec=fetchPeriodMs()/1000>0?fetchPeriodMs()/1000:1;
+					_slipMs=_slipMs>dec?_slipMs-dec:0;
+				}
 				enter(sht31_sleeping_state,nowMs);
 			} else {
 				fail(nowMs);
@@ -353,6 +380,18 @@ uint16_t SHT31<TTransport>::periodicCommand(SHT31_Sample_Rate_t mps) const{
     case _10mps_med_Res: return SHT31_PERIODIC_10mps_MEDREP;
     case _10mps_low_Res: return SHT31_PERIODIC_10mps_LOWREP;
     default: return SHT31_PERIODIC_1mps_LOWREP;
+  }
+}
+
+template <typename TTransport>
+uint32_t SHT31<TTransport>::fetchPeriodMs() const{
+  switch (_mps) {
+    case _05mps_high_Res: case _05_med_Res: case _05_low_Res: return 2000;
+    case _1mps_high_Res: case _1mps_med_Res: case _1mps_low_Res: return 1000;
+    case _2mps_high_Res: case _2mps_med_Res: case _2mps_low_Res: return 500;
+    case _4mps_high_Res: case _4mps_med_Res: case _4mps_low_Res: return 250;
+    case _10mps_high_Res: case _10mps_med_Res: case _10mps_low_Res: return 100;
+    default: return 1000; // periodicCommand()'s default is 1 mps too
   }
 }
 

@@ -35,6 +35,18 @@
   *  periodic mode it is stopped first, as the datasheet asks, and
   *  started again afterwards.
   *
+  *  In periodic mode the result is fetched at the rate the chip measures
+  *  (fetchPeriodMs(): 2000 ms at 0.5 mps down to 100 ms at 10), timed from
+  *  the start of the last good fetch, so each measurement is read once.
+  *  A chip with nothing new yet refuses the read; the driver tries again
+  *  fetchPeriodMs() / 10 later (at least 10 ms) rather than a whole period.
+  *  The chip measures on its own clock, so each refusal also lengthens
+  *  the fetch period by 1 % (up to 6 %), and every 32 good fetches in a row
+  *  shorten it by 0.1 % again: a chip whose clock runs slow is followed
+  *  after a few refusals (each a "bus xfer-fail" in the debug log). A chip
+  *  whose clock runs fast against the MCU's can't be seen, and loses an
+  *  occasional result.
+  *
   *  The state bookkeeping, sleep() and the issue/wait helpers are
   *  inherited from SensorStateMachine (isensor/inc), shared with the
   *  other drivers.
@@ -152,7 +164,8 @@ const uint32_t sht31_reset_ms = 100;			// after the soft reset
 const uint32_t sht31_clearstatus_ms = 100;		// after clearing the status register
 const uint32_t sht31_break_ms = 2;				// after a break, before the next command
 const uint32_t sht31_conversion_ms = 20;		// a single high repeatability measurement takes 15.5 at most
-const uint32_t sht31_fetch_period_ms = 2000;	// between reads in periodic mode
+const uint32_t sht31_fetch_retry_min_ms = 10;	// periodic mode: soonest retry after a refused fetch
+const uint8_t sht31_slip_decay_fetches = 32;	// periodic mode: good fetches in a row before the period shortens again
 const uint32_t sht31_request_poll_ms = 100;		// longest sleep while a request could arrive
 const uint32_t sht31_error_backoff_ms = 100;	// in sht31_error_state before starting again
 
@@ -243,6 +256,10 @@ public:
   bool LowTempActive();
   bool HighHumidityActive();
   bool LowHumidityActive();
+
+  // Periodic mode: the chip's measurement period at the rate asked for
+  // (2000, 1000, 500, 250 or 100 ms), and so the fetch period.
+  uint32_t fetchPeriodMs() const;
 private:
   bool _newdata;
   bool _force_measurement;
@@ -253,6 +270,10 @@ private:
   bool _break_requested;
   bool _heater;
   bool _chip_periodic;		// the chip itself is in periodic mode right now
+  uint32_t _nextFetchMs;	// periodic mode: when to fetch next
+  uint32_t _fetchStartMs;	// when the fetch under way was started
+  uint32_t _slipMs;			// periodic mode: added to fetchPeriodMs() for a chip whose clock runs slow
+  uint8_t _goodFetches;		// good fetches in a row since _slipMs last changed
   /**
    * Placeholder to track humidity internally.
    */

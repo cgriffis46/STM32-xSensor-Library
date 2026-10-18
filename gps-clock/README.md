@@ -196,8 +196,16 @@ those blocks.
     to land. The driver holds the bus mutex across a transfer, and the mutex
     isn't recursive.
 * **shtTask:** started by sensorTask when the first scan finds an SHT31. It
-  runs `xSHT31::main()` in periodic mode (the chip measures once a second; the
-  driver fetches each result), and publishes each reading through atomics.
+  runs `xSHT31::main()` in periodic mode, and publishes each reading through
+  atomics. The chip measures once a second, and the driver fetches each
+  result a second after the last. A fetch that comes before the chip has a
+  new result is refused; it is tried again 100 ms later. Each refusal
+  lengthens the fetch period by 1 %, so a chip whose clock runs slow is
+  followed, and each refusal shows as one `bus xfer-fail` line in the debug
+  log.
+
+  The driver before this fetched every 2 s, so the capture of 2026-10-18 shows
+  an SHT31 reading every 2000 ms.
 * **consoleTask** (`app_console_task()`):
   * hands the console ring to USART2 through `Stm32HalUartTransport`, which
     also takes the keys;
