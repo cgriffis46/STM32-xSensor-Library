@@ -162,9 +162,30 @@ A gap in `seq` means lines were dropped (the 1 KB ring was full). Set
 `ITRANSPORT_DEBUG` to 3 to see every I2C transfer as well, or to 0 to turn the
 log off.
 
+## Regenerating code in CubeMX
+
+`Core/Src/main.c` is CubeMX's own file. The application is in
+`Core/Src/app.cpp`, and `main.c` only calls it from three USER CODE blocks
+(declared in `Core/Inc/app.h`):
+
+| main.c | USER CODE block | call |
+|--------|-----------------|------|
+| `main()`, after the `MX_..._Init()` calls | `2` | `app_init();` |
+| `StartSensorTask()` | `5` | `app_sensor_task(argument);` |
+| `StartConsoleTask()` | `StartConsoleTask` | `app_console_task(argument);` |
+
+The `#include "app.h"` sits in the `Includes` block. CubeMX keeps USER CODE
+blocks when it regenerates `main.c`, so the calls survive regeneration, and
+`main.c` never needs renaming to `.cpp`. Only `app.cpp` is C++.
+
+A regeneration from before this layout wrote a fresh `main.c` with empty task
+loops (`osDelay(1)`). Such a build never touches the I2C bus or the debug
+UART. If a regeneration ever loses the calls, put the three lines back in
+those blocks.
+
 ## Inside
 
-* **sensorTask:**
+* **sensorTask** (`app_sensor_task()`):
   * scans for the BMP390 and the SHT31, then builds the BMP390's driver at
     the address it found;
   * runs `xbmp390::main()`, which sleeps between steps: chip ID, soft reset,
@@ -177,7 +198,7 @@ log off.
 * **shtTask:** started by sensorTask when the first scan finds an SHT31. It
   runs `xSHT31::main()` in periodic mode (the chip measures once a second; the
   driver fetches each result), and publishes each reading through atomics.
-* **consoleTask:**
+* **consoleTask** (`app_console_task()`):
   * hands the console ring to USART2 through `Stm32HalUartTransport`, which
     also takes the keys;
   * calls `dbg::poll()`, which sends the debug log to USART1.
@@ -207,6 +228,8 @@ log off.
   from Bosch's BMP3 Sensor API. The older chips' IDs are from Bosch's
   datasheets, as the drivers and general knowledge have them, not re-read
   here.
+* **CubeMX:** `main.c` was written here in CubeMX's layout; CubeMX hasn't been
+  run on it here.
 * **The `.ioc`** was edited by hand to match:
   * I2C1, USART1 (921600, PB6/PB7), and USART2 with its interrupt;
   * LD3;
