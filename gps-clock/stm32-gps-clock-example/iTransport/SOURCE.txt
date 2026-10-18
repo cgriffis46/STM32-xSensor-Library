@@ -1,5 +1,5 @@
 Vendored from https://github.com/cgriffis46/Claude-iTransport
-commit ca4311e (main, 2026-10-18; MIT, see iTransport/LICENSE).
+commit e0c5a1a (main, 2026-10-18; MIT, see iTransport/LICENSE).
 
 Copied unchanged; only the files this example needs:
 
@@ -11,16 +11,11 @@ Copied unchanged; only the files this example needs:
   iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
                                     (Stm32HalI2CTransport, Stm32HalUartTransport, Stm32DebugPort and
                                     the HAL I2C and UART interrupt callbacks)
-  isensor/inc                    <- isensor/inc/SensorStateMachine.h
+  isensor/inc                    <- isensor/inc (SensorStateMachine, Barometer, Thermometer,
+                                    Hygrometer, SeaLevelBarometer)
   isensor/bme280                 <- isensor/bme280 (inc: BME280.h, xBME280.h; src)
-
-From commit cc1fce5 on the branch claude/sea-level-barometer (on top of
-ca4311e; not merged yet), which makes bme280 and SHT31 implement the
-sensor interfaces:
-  isensor/inc                    <- isensor/inc (Barometer, Thermometer, Hygrometer,
-                                    SeaLevelBarometer)
-  isensor/bme280                 <- isensor/bme280 (inc, src)
   isensor/sht31                  <- isensor/sht31 (inc: SHT31.h, xSHT31.h; src)
+  isensor/bmp390                 <- isensor/bmp390 (inc: bmp390.h, xbmp390.h; src)
 
 OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it.
 
