@@ -57,15 +57,13 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define DS1307_SQW_Pin GPIO_PIN_1
+/* NUCLEO-L432KC pins (the Nucleo-32 header names from memory of ST's UM1956,
+   not checked here). I2C1 is PA9 (D1, SCL) / PA10 (D0, SDA); the console is
+   USART2 on PA2/PA15, the ST-LINK's virtual COM port. */
+#define DS1307_SQW_Pin GPIO_PIN_1       /* A1, TIM2_CH2 <- DS1307 SQW/OUT (optional; 10k pull-up to 3.3 V) */
 #define DS1307_SQW_GPIO_Port GPIOA
-#define W5500_RST_Pin GPIO_PIN_3
-#define W5500_RST_GPIO_Port GPIOA
-#define W5500_CS_Pin GPIO_PIN_4
-#define W5500_CS_GPIO_Port GPIOA
-#define W5500_INT_Pin GPIO_PIN_8
-#define W5500_INT_GPIO_Port GPIOA
-#define W5500_INT_EXTI_IRQn EXTI9_5_IRQn
+#define LD3_Pin GPIO_PIN_3              /* LD3, green: toggles on each DS1307 second */
+#define LD3_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
