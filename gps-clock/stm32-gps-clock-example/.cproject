@@ -71,6 +71,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bme280/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/bme680/inc"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.540242092" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -93,6 +94,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bme280/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/bme680/inc"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols.1323183965" name="Define symbols (-D)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols" useByScannerDiscovery="false" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="DEBUG"/>
@@ -201,6 +203,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bme280/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/bme680/inc"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1697245238" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -223,6 +226,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bme280/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/bme680/inc"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols.451611740" name="Define symbols (-D)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols" useByScannerDiscovery="false" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="USE_HAL_DRIVER"/>
