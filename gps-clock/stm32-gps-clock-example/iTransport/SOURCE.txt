@@ -14,6 +14,14 @@ Copied unchanged; only the files this example needs:
   isensor/inc                    <- isensor/inc/SensorStateMachine.h
   isensor/bme280                 <- isensor/bme280 (inc: BME280.h, xBME280.h; src)
 
+From commit cc1fce5 on the branch claude/sea-level-barometer (on top of
+ca4311e; not merged yet), which makes bme280 and SHT31 implement the
+sensor interfaces:
+  isensor/inc                    <- isensor/inc (Barometer, Thermometer, Hygrometer,
+                                    SeaLevelBarometer)
+  isensor/bme280                 <- isensor/bme280 (inc, src)
+  isensor/sht31                  <- isensor/sht31 (inc: SHT31.h, xSHT31.h; src)
+
 OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it.
 
 From ST (BSD-3): Drivers/STM32L4xx_HAL_Driver is STMicroelectronics/stm32l4xx_hal_driver

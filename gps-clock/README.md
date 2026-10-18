@@ -1,10 +1,16 @@
-# STM32L432KC BME280 Bring-up
+# STM32L432KC BME280 + SHT31 Bring-up
 
-STM32CubeIDE / FreeRTOS project for the NUCLEO-L432KC with a BME280
-(temperature, pressure, humidity) on I2C, for live testing. It runs
-Claude-iTransport's non-blocking BME280 driver (`isensor/bme280`, as
-`xbme280<Stm32HalI2CTransport>`; the commit is in `iTransport/SOURCE.txt`). A
-console runs on the ST-LINK's USB port, and a debug log goes out on a second UART.
+STM32CubeIDE / FreeRTOS project for the NUCLEO-L432KC, for live testing:
+
+* a BME280 (temperature, pressure, humidity) on I2C;
+* an SHT31 (temperature, humidity) beside it, to compare against;
+* the BME280's pressure brought to sea level for your elevation, the
+  "barometer" figure a Davis console or weather.gov shows.
+
+It runs Claude-iTransport's non-blocking drivers, `xbme280<Stm32HalI2CTransport>`
+and `xSHT31<Stm32HalI2CTransport>`, and its `SeaLevelBarometer`. The commits are
+in `iTransport/SOURCE.txt`. A console runs on the ST-LINK's USB port, and a debug
+log goes out on a second UART.
 
 The project folder is still called `stm32-gps-clock-example`: it started as the
 L432 GPS clock (GPS, OLED, W5500, NTP server, PPS), which is in this
@@ -21,6 +27,14 @@ is at `619ac6c`.
 | GND | **GND** | | |
 | SDO | (leave it) | | sets the address: low 0x76, high 0x77. The firmware finds either |
 | CSB | (leave it) | | high, or open on boards that pull it up, selects I2C |
+
+| SHT31 board (optional) | Nucleo pin | |
+|------------------------|------------|---|
+| SCL | **D1** | the same bus as the BME280 |
+| SDA | **D0** | |
+| VIN / VCC | **3V3** | |
+| GND | **GND** | |
+| ADR / ADDR | (leave it) | low 0x44 (most boards), high 0x45: either is found |
 
 | Debug log | Nucleo pin | MCU pin | |
 |-----------|------------|---------|---|
@@ -42,9 +56,11 @@ is at `619ac6c`.
 3. At start-up the board scans the I2C bus and reads the chip ID (register
    0xD0) at 0x76 and 0x77:
 
-       I2C scan: 0x76
-         0x76: chip ID 0x60 = BME280
-       BME280 at 0x76: forced mode, pressure x4, temperature x1, humidity x1, no filter
+       I2C scan: 0x44 0x77
+         0x77: chip ID 0x60 = BME280
+         0x44: answers where an SHT31 would be (it has no ID register to check)
+       BME280 at 0x77: forced mode, pressure x4, temperature x1, humidity x1, no filter
+       SHT31 at 0x44: periodic mode, 1 a second, high repeatability
 
    * **0x60** is a BME280. The driver starts.
    * **0x58** is a **BMP280**. It has no humidity, and many boards sold as
@@ -52,9 +68,15 @@ is at `619ac6c`.
    * **0x61** is a BME680, which has a different driver (`isensor/bme680`).
    * Nothing at all means check SDA/SCL, 3V3 and GND. The scan repeats every
      2 s until a BME280 answers.
-4. Then, once a second, the latest reading:
+   An SHT31 is looked for only in the first scan that finds the BME280:
+   connect it before power-up.
+4. Then, once a second, the latest readings:
 
-       T 23.41 C  P 1009.87 hPa  H 41.2 %RH | 25 readings, T 23.38..23.45 C
+       BME280 T 25.39 C (77.7 F)  H 35.5 %RH  P 1030.26 hPa = 30.54 inHg / 1034.17 hPa at sea level (35 m, cal 0.00 hPa) | 27 readings, T 25.38..25.40 C
+       SHT31  T 25.80 C (78.4 F)  H 34.1 %RH | BME280 - SHT31: T -0.41 C, H 1.4 %RH | 5 readings
+
+   The BME280 line has the board's real numbers from 2026-10-18. The SHT31
+   line is only an example.
 
    * `(?)` after a value means it is outside the BME280's range (-40..85 C,
      300..1100 hPa), or the humidity is pinned at 0 or 100 %, the compensation
@@ -64,7 +86,29 @@ is at `619ac6c`.
    * `no reading ... driver state <n>` means the driver isn't getting through.
      The debug log says why. The state numbers are `bme280_state_t` in
      `isensor/bme280/inc/BME280.h`; 32 is the error state.
-5. LD3 (green) toggles on each reading.
+5. LD3 (green) toggles on each BME280 reading.
+
+### Sea-level pressure
+
+The BME280 measures the *station* pressure, the air pressure where it sits.
+Weather reports and the Davis console show it brought to sea level. The
+`SeaLevelBarometer` (Claude-iTransport's `isensor/inc/SeaLevelBarometer.h`) does
+the same: it gives the **altimeter setting**, NOAA's formula from the station
+pressure and the elevation, which is what weather.gov's "Barometer" is.
+
+1. **Set your elevation:** `e 115` (feet) or `e 35m` (metres). It defaults to
+   `STATION_ELEVATION_M` in `main.cpp` (0), and isn't kept across a reset, so put
+   your elevation there once you know it.
+2. **Calibrate if you like:** when the elevation is right, type the current
+   reference reading, e.g. `b 30.54` from weather.gov. The difference becomes an
+   offset added to the station pressure; that is the sensor's own error, so it
+   stays right as the weather changes. `o` clears it.
+
+On 2026-10-18 the board read 1030.26 hPa at the sensor, and weather.gov showed
+30.54 inHg. That pair works out to an elevation of about 35 m (115 ft), with no
+offset needed. If your elevation is different, the difference is the BME280's
+error, and `b` takes it out.
+
 
 **What to expect.**
 
@@ -80,6 +124,9 @@ is at `619ac6c`.
 | Command | |
 |---------|---|
 | `s` | scan the I2C bus again, and read the chip ID at 0x76 and 0x77 |
+| `e 115` / `e 35m` | the station's elevation, in feet or metres |
+| `b 30.54` | calibrate the sea-level reading to this many inHg now |
+| `o` | clear the calibration offset |
 | `h` | the help |
 
 ### The debug log (D5)
@@ -93,8 +140,14 @@ project's C and C++ defines).
 * `app chip-id <address> <id>`: what each scan found at 0x76 and 0x77.
 * `bme280 st <from> <to>`: the driver's state changes, as `bme280_state_t`
   numbers. `bme280 fail`, `bus xfer-fail` and `bus-err` are I2C faults.
-* `app reading <T x100> <P Pa> <H x100>`: each reading, as integers. For
-  example, `app reading 2341 100987 4120` is 23.41 C, 1009.87 hPa, 41.20 %RH.
+* `app reading <T x100> <P Pa> <H x100>`: each BME280 reading, as integers.
+  For example, `app reading 2341 100987 4120` is 23.41 C, 1009.87 hPa,
+  41.20 %RH.
+* `sht31 st <from> <to>`: the SHT31 driver's states (`sht31_state_t` in
+  `SHT31.h`; 37 is its error state).
+* `app sht <T x100> <H x100>`: each SHT31 reading.
+* `app slp <Pa>`: the sea-level reading, once a second.
+* `app cal <offset Pa> <elevation m>`: a `b` calibration.
 * `app cmd <char>`: a console command.
 
 A gap in `seq` means lines were dropped (the 1 KB ring was full). Set
@@ -111,6 +164,9 @@ log off.
   * A scan asked for while the driver has a transfer outstanding waits for it
     to land: the driver holds the bus mutex across a transfer, and the mutex
     isn't recursive.
+* **shtTask:** started by sensorTask when the first scan finds an SHT31. It
+  runs `xSHT31::main()` in periodic mode (the chip measures once a second; the
+  driver fetches each result), and publishes each reading through atomics.
 * **consoleTask:**
   * hands the console ring to USART2 through `Stm32HalUartTransport`, which
     also takes the keys;
@@ -121,17 +177,28 @@ log off.
 
 ## Not verified
 
-* Not run on the board yet.
+* **On the board:** the BME280 part ran on a NUCLEO-L432KC on 2026-10-18, and a
+  Saleae capture checked it:
+  * the chip at 0x77 with ID 0x60;
+  * the configuration bytes;
+  * a reading every 201-202 ms with no faults;
+  * the compensation, recomputed by hand from the raw bytes.
+
+  The firmware with the SHT31 and the sea-level reading hasn't run yet.
   * Built with arm-none-eabi-gcc 13 using the CubeIDE flags, without warnings:
-    42 KB flash at -Os (70 KB at -O0), 26 KB RAM.
-  * The driver's host test (`BME280_test`, a simulated chip) passes in
-    Claude-iTransport at `ca4311e`.
+    68 KB flash at -Os (103 KB at -O0), 26 KB RAM. `strtof` and `pow` (newlib)
+    account for about 7 KB of it.
+  * The drivers' host tests (`BME280_test`, `SHT31_test`, simulated chips)
+    and `sea_level_barometer_test` pass in Claude-iTransport at `cc1fce5`.
+  * The SHT31 hasn't been run on a chip by this firmware.
 * The chip IDs (0x60 BME280, 0x58 BMP280, 0x61 BME680) and the BME280's
   ranges are from Bosch's datasheets as the drivers and general knowledge have
   them, not re-read here.
 * The `.ioc` was edited by hand to match:
   * I2C1, USART1 (921600, PB6/PB7), and USART2 with its interrupt;
   * LD3;
-  * the two tasks and their mutexes.
+  * sensorTask, consoleTask and their mutexes.
+
+  shtTask isn't in it: sensorTask starts it at run time with `osThreadNew()`.
 
   Open it in CubeMX and check it before generating code over the project.

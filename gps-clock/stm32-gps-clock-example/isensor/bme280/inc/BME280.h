@@ -38,6 +38,9 @@
 #include <utility>
 #include "ISensorTransport.h"
 #include "SensorStateMachine.h"
+#include "Barometer.h"
+#include "Thermometer.h"
+#include "Hygrometer.h"
 
 namespace BME280 {
 
@@ -197,7 +200,8 @@ typedef struct bme280_param_t{
 }bme280_param_t;
 
 template <typename TTransport>
-class bme280 : public SensorStateMachine<TTransport, bme280_state_t> {
+class bme280 : public SensorStateMachine<TTransport, bme280_state_t>,
+               public Barometer, public Thermometer, public Hygrometer {
 	static_assert(std::is_base_of<ISensorTransport, TTransport>::value,
 			"bme280<TTransport>: TTransport must derive from ISensorTransport");
 	typedef SensorStateMachine<TTransport, bme280_state_t> base;
@@ -226,6 +230,13 @@ public:
 	bool GetTemperature(double *t);	// degrees C. false until the first reading
 	bool GetPressure(double *p);	// Pa. false until the first reading
 	bool GetHumidity(double *h);	// %RH. false until the first reading
+
+	// The same readings through isensor's interfaces (isensor/inc), so a
+	// SeaLevelBarometer, or anything else written to them, can take a
+	// bme280. NAN until the first reading; they leave newData() alone.
+	float getPressure() const override { return (float)_pressure; }		// Pa
+	float getTemperature() const override { return (float)_temp; }		// degrees C
+	float getHumidity() const override { return (float)_humidity; }		// %RH
 
 protected:
 

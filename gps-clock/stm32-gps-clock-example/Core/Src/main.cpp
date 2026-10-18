@@ -2,24 +2,30 @@
 /**
   ******************************************************************************
   * @file           : main.cpp
-  * @brief          : BME280 bring-up on the NUCLEO-L432KC
+  * @brief          : BME280 and SHT31 bring-up on the NUCLEO-L432KC
   *
-  *  A live test of one sensor: a BME280 (temperature, pressure, humidity)
-  *  on I2C1, read by Claude-iTransport's non-blocking driver
-  *  (xbme280<Stm32HalI2CTransport>, isensor/bme280; see
-  *  iTransport/SOURCE.txt) in forced mode, about five readings a second.
-  *  Once a second the latest reading goes to the ST-LINK's virtual COM
-  *  port (USART2, 115200 8N1), with a flag on any value outside the
-  *  BME280's range.
+  *  A live test of two sensors on I2C1: a BME280 (temperature, pressure,
+  *  humidity) and, if one answers, an SHT31 (temperature, humidity) to
+  *  compare it with. Claude-iTransport's non-blocking drivers
+  *  (xbme280<Stm32HalI2CTransport> in forced mode, about five readings a
+  *  second; xSHT31<Stm32HalI2CTransport> in periodic mode, one a second,
+  *  in its own task; see iTransport/SOURCE.txt). The BME280's station
+  *  pressure also goes through a SeaLevelBarometer (isensor/inc): the
+  *  altimeter setting for the station's elevation, the sea-level figure
+  *  a Davis console or weather.gov shows, with a calibration offset the
+  *  console can set against such a reference. Once a second the latest
+  *  readings go to the ST-LINK's virtual COM port (USART2, 115200 8N1),
+  *  flagged where outside the BME280's range.
   *
   *  At start-up the I2C bus is scanned and the chip ID read at 0x76 and
   *  0x77 (the address depends on the board's SDO pin): 0x60 is a BME280,
   *  0x58 a BMP280 (no humidity, and many boards sold as BME280 carry one),
-  *  0x61 a BME680. The scan repeats every 2 s until a BME280 answers.
+  *  0x61 a BME680. The scan repeats every 2 s until a BME280 answers. An
+  *  SHT31 at 0x44 or 0x45 found by the first good scan gets its task.
   *
   *  A debug log (Claude-iTransport's DebugLog.h, at ITRANSPORT_DEBUG 2, set
   *  in the project's defines) goes out on USART1 TX, D5 (PB6), at 921600
-  *  8N1: the driver's state changes and I2C faults ("bme280", "bus"), and
+  *  8N1: the drivers' state changes and I2C faults ("bme280", "sht31", "bus"), and
   *  this application's events ("app"). Read it with a 3.3 V USB-serial
   *  adapter or the Saleae's async serial analyser.
   *
@@ -27,9 +33,9 @@
   *  in the repository's history at commit eb4b352.
   *
   *  Wiring (NUCLEO-L432KC):
-  *    I2C1_SCL  PA9  (D1)  -> BME280 SCL (SCK)
-  *    I2C1_SDA  PA10 (D0)  -> BME280 SDA (SDI)
-  *    3V3, GND             -> BME280 VCC/VIN, GND
+  *    I2C1_SCL  PA9  (D1)  -> BME280 SCL (SCK), SHT31 SCL
+  *    I2C1_SDA  PA10 (D0)  -> BME280 SDA (SDI), SHT31 SDA
+  *    3V3, GND             -> BME280 and SHT31 VCC/VIN, GND
   *    USART2    PA2/PA15   <> ST-LINK virtual COM port (the USB cable)
   *    USART1_TX PB6  (D5)  -> debug log, 921600 8N1 (USART1_RX PB7, D4, unused)
   *    LD3       PB3        green LED: toggles on each reading
@@ -63,11 +69,14 @@
 #include "Stm32DebugPort.h"
 #include "DebugLog.h"
 #include "xBME280.h"
+#include "xSHT31.h"
+#include "SeaLevelBarometer.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 typedef BME280::xbme280<Stm32HalI2CTransport> Bme280Sensor;
+typedef xSHT31<Stm32HalI2CTransport> Sht31Sensor;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -78,6 +87,15 @@ typedef BME280::xbme280<Stm32HalI2CTransport> Bme280Sensor;
 #define CHIP_ID_BME280          0x60
 #define CHIP_ID_BMP280          0x58
 #define CHIP_ID_BME680          0x61
+
+#define SHT31_ADDR_A            0x44       // ADDR pin low (most boards)
+#define SHT31_ADDR_B            0x45       // ADDR pin high
+
+// The station's elevation above mean sea level, for the altimeter setting.
+// Set yours here, or with the console's e command (it isn't kept across a
+// reset). 0 until set: the reading is then the station pressure less 0.3 hPa.
+#define STATION_ELEVATION_M     0.0f
+#define M_PER_FT                0.3048f
 
 #define SCAN_RETRY_MS           2000UL     // no BME280 found: scan again this often
 #define READING_STALE_MS        3000UL     // no reading for this long: say so
@@ -105,6 +123,13 @@ osThreadId_t sensorTaskHandle;
 const osThreadAttr_t sensorTask_attributes = {
   .name = "sensorTask",
   .stack_size = 512 * 4,
+  .priority = (osPriority_t) osPriorityNormal,
+};
+/* Definitions for shtTask (started by sensorTask when an SHT31 answers) */
+osThreadId_t shtTaskHandle;
+const osThreadAttr_t shtTask_attributes = {
+  .name = "shtTask",
+  .stack_size = 384 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
 /* Definitions for consoleTask */
@@ -135,6 +160,13 @@ static uint32_t g_conDropped = 0;
 // sensorTask: g_cmdReady set once it is complete, cleared when taken
 static char g_cmd[CONSOLE_LINE];
 static std::atomic<bool> g_cmdReady{false};
+
+// The SHT31: its address (0 if none) for shtTask, and its latest reading
+// for sensorTask (written by shtTask only; each value a 32-bit atomic)
+static std::atomic<uint8_t> g_shtAddr{0};
+static std::atomic<float> g_shtT{NAN}, g_shtH{NAN};
+static std::atomic<uint32_t> g_shtReadings{0}, g_shtTick{0};
+static std::atomic<int> g_shtState{0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -144,6 +176,7 @@ static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartSensorTask(void *argument);
+void StartShtTask(void *argument);
 void StartConsoleTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -208,8 +241,11 @@ static void printHelp(void)
 {
   consolePrint("\r\nNUCLEO-L432KC BME280 bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), 100 kHz\r\n"
                "commands (Enter to finish; turn on your terminal's local echo):\r\n"
-               "  s   scan the I2C bus and read the chip ID at 0x76 and 0x77\r\n"
-               "  h   this help\r\n\r\n");
+               "  s          scan the I2C bus and read the chip ID at 0x76 and 0x77\r\n"
+               "  e 115      the station's elevation in feet (e 35m for metres), for the sea-level reading\r\n"
+               "  b 30.54    calibrate: make the sea-level reading this many inHg now (from weather.gov, say)\r\n"
+               "  o          clear the calibration offset\r\n"
+               "  h          this help\r\n\r\n");
 }
 
 // "-12.34" from a double with `decimals` places, without printf float
@@ -244,9 +280,10 @@ static const char *chipName(uint8_t id)
 // sees it land, so call this only from a thread with no transfer
 // outstanding (sensorTask waits for a state of its driver's with none). Returns the
 // address of a BME280, or 0 (and 0 if the bus stayed busy).
-static uint8_t scanBus(void)
+static uint8_t scanBus(uint8_t *shtAddr = nullptr)
 {
   uint8_t found = 0;
+  uint8_t sht = 0;
   char list[160];
   size_t n = 0;
   list[0] = 0;
@@ -255,8 +292,12 @@ static uint8_t scanBus(void)
     return 0;
   }
   for (uint8_t a = 0x08; a <= 0x77; ++a) {
-    if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK && n + 6 < sizeof(list))
-      n += (size_t) snprintf(list + n, sizeof(list) - n, " 0x%02X", a);
+    if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK) {
+      if (n + 6 < sizeof(list))
+        n += (size_t) snprintf(list + n, sizeof(list) - n, " 0x%02X", a);
+      if ((a == SHT31_ADDR_A || a == SHT31_ADDR_B) && sht == 0)
+        sht = a;
+    }
   }
   uint8_t ids[2] = {0, 0};
   bool idOk[2] = {false, false};
@@ -276,6 +317,10 @@ static uint8_t scanBus(void)
         found = a;
     }
   }
+  if (sht != 0)
+    consolePrint("  0x%02X: answers where an SHT31 would be (it has no ID register to check)\r\n", sht);
+  if (shtAddr != nullptr)
+    *shtAddr = sht;
   return found;
 }
 /* USER CODE END 0 */
@@ -607,12 +652,20 @@ void StartSensorTask(void *argument)
 
   // Find it first: 0x76 or 0x77, by its chip ID
   uint8_t addr = 0;
-  while ((addr = scanBus()) == 0) {
+  uint8_t shtAddr = 0;
+  while ((addr = scanBus(&shtAddr)) == 0) {
     consolePrint("no BME280 (chip ID 0x60) at 0x76 or 0x77; scanning again in %lu s\r\n",
                  (unsigned long)(SCAN_RETRY_MS / 1000));
     osDelay(SCAN_RETRY_MS);
   }
   consolePrint("BME280 at 0x%02X: forced mode, pressure x4, temperature x1, humidity x1, no filter\r\n", addr);
+  if (shtAddr != 0) {
+    g_shtAddr.store(shtAddr);
+    shtTaskHandle = osThreadNew(StartShtTask, NULL, &shtTask_attributes);
+    consolePrint("SHT31 at 0x%02X: periodic mode, 1 a second, high repeatability\r\n", shtAddr);
+  } else {
+    consolePrint("no SHT31 at 0x44 or 0x45: BME280 only\r\n");
+  }
 
   // Forced mode: a measurement whenever the driver asks for one (about
   // every 0.2 s: its 100 ms pause, then up to 100 ms of conversion)
@@ -626,6 +679,9 @@ void StartSensorTask(void *argument)
   // Built here: the transport needs i2c1_mutex and the address just found
   static Bme280Sensor sensor(param, &hi2c1, addr, i2c1_mutexHandle);
   sensor.setDebugTag("bme280");             // its state changes and faults in the debug log
+  // Its pressure brought to sea level (the altimeter setting) for the
+  // station's elevation; the offset is the console's b command's
+  static SeaLevelBarometer slp(sensor, STATION_ELEVATION_M);
 
   double t = NAN, p = NAN, h = NAN;
   uint32_t readings = 0;
@@ -660,12 +716,41 @@ void StartSensorTask(void *argument)
       g_cmdReady.store(false, std::memory_order_release);
       consolePrint("> %s\r\n", cmd);
       DBG_EVENT("app", "cmd", (int32_t) cmd[0]);
-      if (cmd[0] == 's' && cmd[1] == 0)
+      char *end = nullptr;
+      if (cmd[0] == 's' && cmd[1] == 0) {
         scanPending = true;                 // done below, between the driver's transfers
-      else if ((cmd[0] == 'h' || cmd[0] == '?') && cmd[1] == 0)
+      } else if (cmd[0] == 'e' && cmd[1] == ' ') {
+        const float v = strtof(cmd + 2, &end);
+        const bool metres = end != nullptr && (*end == 'm' || *end == 'M');
+        if (end == cmd + 2 || !(v > -500.0f && v < 30000.0f)) {
+          consolePrint("e <feet> or e <metres>m, e.g. e 115 or e 35m\r\n");
+        } else {
+          slp.setElevation(metres ? v : v * M_PER_FT);
+          char m[16];
+          formatFixed(m, sizeof(m), slp.elevation(), 1);
+          consolePrint("elevation %s m (%ld ft); the calibration offset is kept: b again if it was set at another elevation\r\n",
+                       m, lroundf(slp.elevation() / M_PER_FT));
+        }
+      } else if (cmd[0] == 'b' && cmd[1] == ' ') {
+        const float inHg = strtof(cmd + 2, &end);
+        if (end == cmd + 2 || !(inHg > 25.0f && inHg < 33.0f)) {
+          consolePrint("b <inHg>, the sea-level pressure to match now, e.g. b 30.54\r\n");
+        } else if (!slp.calibrateTo(baro::inHgToPa(inHg))) {
+          consolePrint("no pressure reading yet: try again in a moment\r\n");
+        } else {
+          char o[16];
+          formatFixed(o, sizeof(o), slp.offset() / 100.0, 2);
+          consolePrint("calibrated: offset %s hPa added to the station pressure\r\n", o);
+          DBG_EVENT("app", "cal", (int32_t) lroundf(slp.offset()), (int32_t) lroundf(slp.elevation()));
+        }
+      } else if (cmd[0] == 'o' && cmd[1] == 0) {
+        slp.setOffset(0.0f);
+        consolePrint("calibration offset cleared\r\n");
+      } else if ((cmd[0] == 'h' || cmd[0] == '?') && cmd[1] == 0) {
         printHelp();
-      else
+      } else {
         consolePrint("unknown command; h for help\r\n");
+      }
     }
 
     // The scan: only in a state where the driver has no transfer
@@ -700,12 +785,77 @@ void StartSensorTask(void *argument)
         const bool tBad = !(t >= -40.0 && t <= 85.0);
         const bool pBad = !(p >= 30000.0 && p <= 110000.0);
         const bool hBad = !(h > 0.0 && h < 100.0);
-        consolePrint("T %s C%s  P %s hPa%s  H %s %%RH%s | %lu readings, T %s..%s C\r\n", ts, tBad ? " (?)" : "", ps,
-                     pBad ? " (?)" : "", hs, hBad ? " (?)" : "", (unsigned long) readings, lo, hi);
+        char tf[16], sl[16], sh[16], el[16], of[16];
+        formatFixed(tf, sizeof(tf), t * 9.0 / 5.0 + 32.0, 1);
+        const float alt = slp.getPressure();
+        formatFixed(sl, sizeof(sl), baro::paToInHg(alt), 2);
+        formatFixed(sh, sizeof(sh), alt / 100.0, 2);
+        formatFixed(el, sizeof(el), slp.elevation(), 0);
+        formatFixed(of, sizeof(of), slp.offset() / 100.0, 2);
+        consolePrint("BME280 T %s C (%s F)%s  H %s %%RH%s  P %s hPa%s = %s inHg / %s hPa at sea level (%s m, cal %s hPa)"
+                     " | %lu readings, T %s..%s C\r\n", ts, tf, tBad ? " (?)" : "", hs, hBad ? " (?)" : "", ps,
+                     pBad ? " (?)" : "", sl, sh, el, of, (unsigned long) readings, lo, hi);
+        DBG_EVENT("app", "slp", (int32_t) lroundf(alt));
+      }
+      // The SHT31 beside it
+      const uint32_t shtN = g_shtReadings.load();
+      if (g_shtAddr.load() != 0) {
+        const float st = g_shtT.load(), shh = g_shtH.load();
+        if (shtN == 0 || tick - g_shtTick.load() > READING_STALE_MS) {
+          consolePrint("SHT31  no reading%s (driver state %d%s)\r\n", shtN == 0 ? " yet" : " for 3 s", g_shtState.load(),
+                       g_shtState.load() == sht31_error_state ? ", error: not answering" : "");
+        } else {
+          char a[16], af[16], b[16], dt[16], dh[16];
+          formatFixed(a, sizeof(a), st, 2);
+          formatFixed(af, sizeof(af), st * 9.0 / 5.0 + 32.0, 1);
+          formatFixed(b, sizeof(b), shh, 1);
+          formatFixed(dt, sizeof(dt), t - st, 2);
+          formatFixed(dh, sizeof(dh), h - shh, 1);
+          consolePrint("SHT31  T %s C (%s F)  H %s %%RH | BME280 - SHT31: T %s C, H %s %%RH | %lu readings\r\n", a, af, b, dt,
+                       dh, (unsigned long) shtN);
+        }
       }
     }
   }
   /* USER CODE END 5 */
+}
+
+/* USER CODE BEGIN Header_StartShtTask */
+/**
+  * @brief  Runs the SHT31's driver in periodic mode (one reading a second)
+  *         and publishes each reading for sensorTask. Started by
+  *         sensorTask once the bus scan has found an SHT31; the driver
+  *         gets its own thread since its main() sleeps inside.
+  * @param  argument: Not used
+  * @retval None
+  */
+/* USER CODE END Header_StartShtTask */
+void StartShtTask(void *argument)
+{
+  /* USER CODE BEGIN StartShtTask */
+  SHT31_param_t param;
+  param.periodic_mode = true;
+  param.heater_enable = false;
+  param.sample_rate = _1mps_high_Res;
+  static Sht31Sensor sht(param, &hi2c1, g_shtAddr.load(), i2c1_mutexHandle);
+  sht.setDebugTag("sht31");
+
+  for(;;)
+  {
+    sht.main(osKernelGetTickCount());       // sleeps inside, up to 100 ms
+    g_shtState.store((int) sht.state());
+    if (sht.newData()) {
+      float t = NAN, h = NAN;
+      sht.GetTemperature(&t);
+      sht.GetHumidity(&h);
+      g_shtT.store(t);
+      g_shtH.store(h);
+      g_shtTick.store(osKernelGetTickCount());
+      g_shtReadings.fetch_add(1);
+      DBG_EVENT("app", "sht", (int32_t) lroundf(t * 100), (int32_t) lroundf(h * 100));
+    }
+  }
+  /* USER CODE END StartShtTask */
 }
 
 /* USER CODE BEGIN Header_StartConsoleTask */
