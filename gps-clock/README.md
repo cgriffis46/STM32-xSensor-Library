@@ -1,299 +1,247 @@
-# STM32L432KC GPS Clock
+# STM32L432KC BME280 + BMP390 + SHT31 Bring-up
 
-STM32CubeIDE / FreeRTOS example for the STM32L432KC (NUCLEO-L432KC) that combines:
+STM32CubeIDE / FreeRTOS project for the NUCLEO-L432KC, for live testing:
 
-| Part | Library | Interface |
-|------|---------|-----------|
-| DS1307 real-time clock | `isensor/ds1307`: `xds1307<Stm32HalI2CTransport>` | I2C1, address 0x68 |
-| SSD1306 128x64 OLED | `iDisplay/ssd1306`: `xssd1306<Stm32HalI2CTransport>` | I2C1, address 0x3C |
-| MTK3333 GPS (e.g. CDtop PA1616D, Quectel L80/L86) | `isensor/mtk3339`: `xmtk3339<Stm32HalUartTransport>` | USART1, 9600 baud |
-| W5500 Ethernet (WIZ850io, W5500-Lite, ...) | `iNetTransport/w5500`: `w5500<Stm32HalSpiBlockTransport>` behind `xEthernet` | SPI1 with DMA, 10 MHz |
-| NTP server | `iNetTransport/sntp`: `NtpServer`, on the W5500's UDP responder (socket 6) | UDP port 123 |
-| STM32 RTC | `Core/Src/stm32_rtc.cpp` | LSE, PREDIV 3/8191 |
-| GPS PPS (optional) | `Core/Inc/pps_math.h`, TIM2 input capture | PA0 (A0) |
-| DS1307 SQW/OUT, 1 Hz (optional) | `Core/Inc/ds1307_ref.h`, TIM2 input capture | PA1 (A1) |
+* a BME280 (temperature, pressure, humidity) on I2C;
+* a BMP390 (temperature, pressure) and an SHT31 (temperature, humidity) beside
+  it, to compare against;
+* each barometer's pressure brought to sea level for your elevation, the
+  "barometer" figure a Davis console or weather.gov shows.
 
-The drivers are the non-blocking ones from
-[Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport), copied into
-the project unchanged (`iTransport/`, `isensor/`, `iDisplay/`; the commits are in
-`iTransport/SOURCE.txt`). Written for this example and in review in
-Claude-iTransport ([cgriffis46/Claude-iTransport#34](https://github.com/cgriffis46/Claude-iTransport/pull/34)):
-the ds1307 driver, and the W5500's UDP responder and `NtpServer`. The
-mtk3339 driver is written for the MT3339; the MT3333 uses the same NMEA and PMTK
-commands.
+It runs Claude-iTransport's non-blocking drivers, `xbme280<Stm32HalI2CTransport>`,
+`xbmp390<Stm32HalI2CTransport>` and `xSHT31<Stm32HalI2CTransport>`, and its
+`SeaLevelBarometer`. The commits are
+in `iTransport/SOURCE.txt`. A console runs on the ST-LINK's USB port, and a debug
+log goes out on a second UART.
 
-Time flows GPS -> STM32 RTC -> DS1307, and the NTP server serves the STM32 RTC:
-
-* Once the GPS has a fix, its UTC time is applied to the STM32L432's own RTC (on
-  the LSE crystal, 1/8192 s resolution) to a fraction of a second, then copied to
-  the DS1307 at the start of the next second. Re-synced every hour.
-* The display shows the STM32 RTC.
-* The W5500 gets an address by DHCP (shown on the display) and answers NTP
-  requests on UDP port 123 from the STM32 RTC: stratum 1, reference `GPS`.
-* Without a GPS fix, network time (SNTP from `pool.ntp.org`, or the server DHCP
-  names) sets both RTCs instead, and the NTP server says stratum 3. A clock set
-  from the network is set again from the GPS as soon as there is a fix.
-* With the GPS's PPS wired to PA0, the STM32 RTC is disciplined to it (see
-  "PPS" below): within about half a millisecond, and the NTP server says
-  stratum 1, reference `PPS`, 1 ms dispersion. NMEA timing is the fallback.
-* After a power cycle the STM32 RTC starts empty (on the Nucleo, VBAT is tied to
-  VDD) and is seeded from the battery-backed DS1307. With its SQW output wired
-  to PA1 and measured against the PPS beforehand, to its edge and corrected for
-  its drift (see "DS1307 as a reference" below), and the NTP server holds over;
-  otherwise to the whole second (+0.5 s), and the NTP server says "not
-  synchronised" until GPS or network time arrives. A reset keeps the RTC and,
-  in backup registers, where its time came from.
-
-The system clock is 80 MHz (MSI + PLL, trimmed by the LSE crystal).
+The project folder is still called `stm32-gps-clock-example`: it started as the
+L432 GPS clock (GPS, OLED, W5500, NTP server, PPS), which is in this
+repository's history at commit `eb4b352`. The DS1307 bring-up that came between
+is at `619ac6c`.
 
 ## Wiring (NUCLEO-L432KC)
 
-| Signal | MCU pin | Nucleo header | Connect to |
-|--------|---------|---------------|------------|
-| I2C1_SCL | PA9 | D1 | DS1307 SCL, SSD1306 SCL |
-| I2C1_SDA | PA10 | D0 | DS1307 SDA, SSD1306 SDA |
-| USART1_TX | PB6 | D5 | GPS RX |
-| USART1_RX | PB7 | D4 | GPS TX |
-| USART2_TX | PA2 | (ST-LINK VCP) | debug output, 115200 8N1 |
-| USART2_RX | PA15 | (ST-LINK VCP) | |
-| SPI1_SCK | PB3 | D13 | W5500 SCLK (also drives LD3, which flickers) |
-| SPI1_MISO | PB4 | D12 | W5500 MISO |
-| SPI1_MOSI | PB5 | D11 | W5500 MOSI |
-| GPIO out | PA4 | A3 | W5500 SCSn |
-| GPIO out | PA3 | A2 | W5500 RSTn |
-| EXTI8 | PA8 | D9 | W5500 INTn (pulled up; optional, the driver polls without it) |
-| TIM2_CH1 | PA0 | A0 | GPS PPS / 1PPS / FIX output (optional; pulled down; 3.3 V logic) |
-| TIM2_CH2 | PA1 | A1 | DS1307 SQW/OUT (optional; open drain: fit a 10k pull-up to **3.3 V**) |
-| 3V3, GND | | | W5500 3.3 V (about 130 mA) and GND |
+| BME280 board | Nucleo pin | MCU pin | |
+|--------------|------------|---------|---|
+| SCL (or SCK) | **D1** | PA9, I2C1_SCL | |
+| SDA (or SDI) | **D0** | PA10, I2C1_SDA | |
+| VCC / VIN | **3V3** | | most boards also take 5 V on VIN through a regulator; 3V3 always works |
+| GND | **GND** | | |
+| SDO | see the BMP390 | | sets the address: low 0x76, high 0x77. The firmware finds either |
+| CSB | (leave it) | | high, or open on boards that pull it up, selects I2C |
 
-* I2C needs pull-ups to 3.3 V (most DS1307 and SSD1306 breakouts already have them).
-  If the DS1307 board has pull-ups to 5 V, remove them or use a level shifter.
-* The DS1307 needs 5 V on VCC and a backup battery to keep time.
-* W5500 INTn moved from PA1 to PA8 (D9) when the DS1307's SQW took PA1:
-  PA1 is TIM2_CH2, so the SQW edge is latched by the same timer as the PPS.
-  Re-wire an earlier build. (PA1 = TIM2_CH2 and PA8 = D9 are general
-  knowledge of the L432 and the Nucleo-32, not checked in the datasheet here.)
-* SQW/OUT is open drain and the DS1307 runs from 5 V, but PA1 only sees the
-  pull-up's voltage: pull it up to 3.3 V, never 5 V. PA1's own pull-up is on
-  too, but at ~40k it is weak for a long wire.
-* SPI1 is on PB3/PB4/PB5, not the PA5/PA6/PA7 that Claude-iTransport's
-  `stm32l432kc_bringup` uses: on the NUCLEO-L432KC the solder bridges SB16/SB18
-  join PA5/PA6 to PB7/PB6, which are the GPS UART here. PA5/PA6 are left
-  unconfigured.
-* Keep the SPI wires short. SPI1 runs at 10 MHz (prescaler /8); LD3's load on
-  SCK is why it isn't faster.
+| BMP390 board (optional) | Nucleo pin | |
+|-------------------------|------------|---|
+| SCK (SCL) | **D1** | the same bus as the BME280 |
+| SDI (SDA) | **D0** | |
+| VIN / VCC | **3V3** | |
+| GND | **GND** | |
+| SDO | GND or 3V3 | low 0x76, high 0x77: **not the BME280's address**. Both chips can only be told apart at different addresses |
+| CS | (leave it) | high, or open on boards that pull it up, selects I2C |
 
-## Display
+The BME280 ran at 0x77 on 2026-10-18 (its SDO high, as on most boards), so put
+the BMP390 at 0x76 (its SDO to GND), or swap them round. Adafruit's BMP390 board
+is 0x77 unless SDO is tied to GND (from memory of Adafruit's guide, not checked
+here).
 
-```
-GPS: fix  8 sats
-----------------
-    12:34:56          <- double size
- Sun 2026-10-11 UTC
- 37.77490N 122.41940W
-IP 192.168.1.77
-RTC synced 12:30Z GPS
-```
+| SHT31 board (optional) | Nucleo pin | |
+|------------------------|------------|---|
+| SCL | **D1** | the same bus as the BME280 |
+| SDA | **D0** | |
+| VIN / VCC | **3V3** | |
+| GND | **GND** | |
+| ADR / ADDR | (leave it) | low 0x44 (most boards), high 0x45: either is found |
 
-The last line says where the STM32 RTC's time came from: `GPS`, `NTP` (network),
-`RTC from DS1307`, or `RTC not set`.
+| Debug log | Nucleo pin | MCU pin | |
+|-----------|------------|---------|---|
+| TX out | **D5** | PB6, USART1_TX | to a 3.3 V USB-serial adapter's **RX**, or a Saleae channel; 921600 8N1 |
+| GND | **GND** | | the adapter's GND |
+| (RX in) | D4 | PB7, USART1_RX | not used; leave it open (it is pulled up) |
 
-The DS1307 is kept in UTC. To show local time, set `UTC_OFFSET_MINUTES` in
-`Core/Src/main.cpp` (fixed offset, no daylight saving).
+* **I2C pull-ups.** Breakout boards (Adafruit's, and the purple "GY-BME280"
+  ones) carry pull-ups on SDA and SCL. A bare chip needs 4.7k from each to
+  3V3.
+* **The Nucleo pins.** D0/D1 = PA10/PA9 and D4/D5 = PB7/PB6 are from memory of
+  ST's UM1956, not checked here. The console is USART2 (PA2/PA15) on the
+  ST-LINK's virtual COM port, so D0/D1 are free.
 
-## Tasks
+## Using it
 
-* `gpsTask`: runs `xmtk3339::main()`, which sleeps until the UART interrupt
-  wakes it at the end of each NMEA line. On start-up (and whenever the module
-  reports `$PMTK010,001`) the driver sends PMTK314 (RMC + GGA), PMTK220 (1 Hz)
-  and PMTK300, waiting for each `$PMTK001` ack. It publishes the fix, the
-  satellites and, with a fix, the UTC time from each RMC.
-* `displayTask`: owns the DS1307 and the SSD1306, since neither driver is
-  locked. `xds1307::main()` reads the clock every 100 ms in one 7-byte
-  transfer. On the first GPS time with a fix (and hourly after) it calls
-  `setTime()`, which writes all seven registers in one transfer and reads them
-  back. When the second changes it draws the screen into the SSD1306's frame
-  buffer and runs `xssd1306::main()` until the flush is out; the driver sends
-  only the pages that changed, 32 bytes per interrupt-driven I2C transfer. It
-  also prints the time and GPS state to the debug UART.
+1. Flash it (STM32CubeIDE, or STM32CubeProgrammer with the `.elf`).
+2. Open the ST-LINK's virtual COM port at 115200 8N1, with local echo on.
+3. At start-up the board scans the I2C bus and reads two ID registers at 0x76
+   and 0x77: 0xD0 (the BME280's) and 0x00 (the BMP390's). Both chips say 0x60,
+   each in its own register:
 
-* `ethTask`: the W5500's driver thread. Pulses RSTn, starts `xEthernet` with
-  DHCP and a MAC made from the MCU's unique ID (`02:08:DC:xx:xx:xx`), then runs
-  `eth.run()` for good. The W5500 driver runs DHCP, DNS and SNTP on its socket 7;
-  sockets 0 and 1 are left for the application (`xClient`). INTn wakes it at once
-  through `HAL_GPIO_EXTI_Callback` -> `interruptFromIsr()`.
+       I2C scan: 0x44 0x76 0x77
+         0x76: chip ID 0x60 (register 0x00) = BMP390
+         0x77: chip ID 0x60 (register 0xD0) = BME280
+         0x44: answers where an SHT31 would be (it has no ID register to check)
+       BME280 at 0x77: forced mode, pressure x4, temperature x1, humidity x1, no filter
+       SHT31 at 0x44: periodic mode, 1 a second, high repeatability
+       BMP390 at 0x76: forced, 1 a second, pressure x8, temperature x1, no filter
 
-`displayTask` is the clock task. It owns the DS1307 and the SSD1306, and sets
-the STM32 RTC:
+   * **0x60 in 0xD0** is a BME280. The driver starts.
+   * **0x60 in 0x00** is a BMP390 (**0x50** a BMP388, which the same driver
+     runs). The BME280's register is checked first.
+   * **0x58** in 0xD0 is a **BMP280**. It has no humidity, and many boards sold as
+     "BME280" carry one. The driver isn't started for it, and the scan repeats.
+   * **0x61** is a BME680, which has a different driver (`isensor/bme680`).
+   * Nothing at all means check SDA/SCL, 3V3 and GND. The scan repeats every
+     2 s until a BME280 answers.
+   The SHT31 and the BMP390 are looked for only in the first scan that finds
+   the BME280: connect them before power-up.
+4. Then, once a second, the latest readings:
 
-1. **GPS** (when due, or whenever the clock came from anywhere else): the RMC's
-   second, plus the time since the sentence was parsed and `GPS_NMEA_DELAY_MS`.
-   `StmRtc_Set()` writes the date and time in one init-mode session (the second
-   starts as it ends), then moves the RTC forward by the fraction with a
-   sub-second shift (`RTC_SHIFTR`). The NTP server is told: stratum 1, `GPS`,
-   root dispersion 100 ms (NMEA timing without PPS).
-2. **Network time**, when the GPS has no fix (and the clock isn't GPS time still
-   within 24 h of holdover): `eth.unixTimeMs()`, to the ms. Stratum 3.
-3. **The DS1307**, only when the STM32 RTC is empty after a power cycle. Its
-   phase within the second is unknown, so it's set to the middle of the second;
-   NTP stays "not synchronised".
+       BME280 T 25.39 C (77.7 F)  H 35.5 %RH  P 1030.26 hPa = 30.56 inHg / 1034.84 hPa at sea level (40 m, cal 0.00 hPa) | 27 readings, T 25.38..25.40 C
+       SHT31  T 25.80 C (78.4 F)  H 34.1 %RH | BME280 - SHT31: T -0.41 C, H 1.4 %RH | 5 readings
+       BMP390 T 25.61 C (78.1 F)  P 1030.48 hPa = 30.57 inHg / 1035.06 hPa at sea level (cal 0.00 hPa) | BME280 - BMP390: T -0.22 C, P -0.22 hPa | 5 readings
 
-After 1 or 2 the DS1307 is written from the STM32 RTC in the first 100 ms of a
-second. After 24 h without GPS or network time the NTP server goes back to "not
-synchronised".
+   The BME280's station pressure and temperature are the board's real numbers
+   from 2026-10-18 (worked out again at 40 m). The SHT31 and BMP390 lines are
+   only examples.
 
-### PPS
+   * `(?)` after a value means it is outside the BME280's range (-40..85 C,
+     300..1100 hPa), or the humidity is pinned at 0 or 100 %, the compensation
+     formula's limits.
+   * The count and the min..max show the readings keep coming, about five a
+     second.
+   * `no reading ... driver state <n>` means the driver isn't getting through.
+     The debug log says why. The state numbers are `bme280_state_t` in
+     `isensor/bme280/inc/BME280.h`; 32 is the error state.
+5. LD3 (green) toggles on each BME280 reading.
 
-Most GPS modules have a pulse-per-second output whose rising edge starts each
-UTC second, to well under a microsecond; the RMC sentence that follows names
-that second (general MTK behaviour, not checked against the module's datasheet:
-the debug line's `nmea=` shows the gap, which should be 100-900 ms). Many MTK3333
-modules only pulse once they have a fix. On some breakouts the pin is labelled
-`1PPS`, `PPS` or `FIX`.
+### Sea-level pressure
 
-* TIM2 runs free at 1 MHz (32-bit) and latches each edge in hardware (input
-  capture on PA0), so interrupt latency doesn't matter. The last four edges are
-  kept.
-* Each RMC (timestamped with TIM2 as it is parsed) is paired with the edge just
-  before it, within a second; that edge must itself be a second after the one
-  before, so a lone or glitched edge is ignored.
-* The clock task reads the STM32 RTC and TIM2 together (interrupts masked) and
-  works out the RTC's error against the edge. `ppsmath::Discipline` then:
-  * sets the RTC outright if it is 200 ms or more off (at start-up);
-  * shifts it (`RTC_SHIFTR`) when it is more than 400 us off;
-  * every 1024 s, measures the drift (corrections taken out) and adjusts the
-    RTC's smooth calibration (`RTC_CALR`, 0.95 ppm steps) to cancel it. The
-    calibration survives a reset.
-* While locked (under 1 ms), every edge renews the NTP server's reference:
-  stratum 1, `PPS`, root dispersion 1 ms. The DS1307 is written hourly
-  (with its SQW in use: only when it has wandered 200 ms from UTC).
-* No paired edge for 3 s: back to NMEA timing, and the RTC holds the time and
-  calibration it was locked to. The NTP server's dispersion grows by 20 ppm
-  from the last edge.
+The BME280 measures the *station* pressure, the air pressure where it sits.
+Weather reports and the Davis console show it brought to sea level. The
+`SeaLevelBarometer` (Claude-iTransport's `isensor/inc/SeaLevelBarometer.h`) does
+the same: it gives the **altimeter setting**, NOAA's formula from the station
+pressure and the elevation, which is what weather.gov's "Barometer" is.
 
-`test/pps_math_test.cpp` (on a PC) runs the loop against a simulated RTC whose
-crystal is off by -48 to +23 ppm: after six hours each is within 0.5 ppm, and the
-phase within 0.3 ms (the RTC counts in 1/8192 s: `PREDIV_A` 3, `PREDIV_S` 8191,
-the finest that keeps smooth calibration's CALP usable; `MX_RTC_Init()` rewrites
-the prescalers of an RTC left running with others). The display's last line reads `PPS lock -23.8ppm` (the
-calibration) while locked; the debug line shows the error, calibration and NMEA
-delay every second. Measure that NMEA delay with PPS, then put it in
-`GPS_NMEA_DELAY_MS` for when PPS is absent.
+1. **Set your elevation:** `STATION_ELEVATION_M` in `main.cpp` is **40 m**
+   (131 ft, this board's station, from elevationfinder.net). Change it there,
+   or for the session with `e 131` (feet) or `e 40m` (metres); `e` isn't kept
+   across a reset. It applies to both barometers.
+2. **Calibrate if you like:** when the elevation is right, type the current
+   reference reading, e.g. `b 30.54` from weather.gov. Each barometer gets its
+   own offset, added to its station pressure: that is the sensor's own error,
+   so it stays right as the weather changes, and after a `b` the two show how
+   far they drift apart. `o` clears both.
 
-### DS1307 as a reference
+On 2026-10-18 the board read 1030.26 hPa at the sensor, and weather.gov showed
+30.54 inHg. That pair works out to an elevation of about 35 m (115 ft). At 40 m
+the BME280 reads 30.56 inHg, 0.02 inHg (about 0.6 hPa) high: the BME280's
+own error, within its datasheet's ±1 hPa (general knowledge), and what `b`
+takes out.
 
-The DS1307's SQW/OUT pin gives a 1 Hz square wave (control register 0x10). Its
-falling edge is taken to be where the DS1307's seconds tick (general knowledge,
-from secondary sources; the datasheet couldn't be fetched here), so that edge
-is latched on PA1 by TIM2, beside the PPS, and the DS1307 becomes a clock that
-can be measured to the microsecond. `Core/Inc/ds1307_ref.h` holds the logic:
 
-* **Labelling.** Each read's I2C START (the DS1307 latches its time on START)
-  is timed by TIM2 either side of the call that issues it; a read that starts
-  clearly inside one of the DS1307's seconds names the edge before it.
-* **Checking the assumption.** Until it is checked, reads alternate between
-  early (50-300 ms after an edge) and late (600-850 ms) in the second. If the
-  seconds ticked at the rising edge instead, early reads would name the edge one
-  second less than late ones. Two of each must agree; any disagreement and the
-  SQW is not used (`SQW MISMATCH` in the debug line).
-* **Measuring.** With the PPS paired to its second, each labelled edge gives
-  the DS1307's offset from UTC to about a microsecond (TIM2 scaled by the PPS
-  interval). After 1024 s the slope gives its drift. Offset, time and drift are
-  saved to the DS1307's battery-backed RAM (25 bytes at 0x08, CRC-8) when first
-  measured and every 10 minutes. The DS1307 is no longer rewritten every hour
-  (each write restarts its divider, and the measurement), only when it is 200 ms
-  from UTC; after a write the RAM says "offset unknown" until it is measured again.
-* **Cold start.** After a power cycle, once the check has passed (about 4 s),
-  the STM32 RTC is set from the latest labelled edge: the DS1307's time less its
-  saved offset carried on by its saved drift (`dsref::utcAtEdgeUs`). If that
-  measurement is under 24 h old the NTP server holds over (stratum 1, `PPS`,
-  reference time the measurement's, 2 ms + 20 ppm of age). No SQW within 8 s,
-  or a mismatch: the old way, whole seconds + 0.5 s.
-* **Holdover check.** Without PPS, each labelled edge compares the DS1307
-  (corrected) with the STM32 RTC (calibrated). If they drift apart by more than
-  5 ms + 2 ppm of the time since the measurement, one of the two crystals is
-  not doing what was measured, and the NTP server says "not synchronised"
-  (`DISAGREE` in the debug line).
+**What to expect.**
 
-`test/ds1307_ref_test.cpp` (on a PC): DS1307s from -63 to +87.5 ppm measured
-for four hours give their drift to 0.001 ppm, and a cold start 30 days later
-lands within a few microseconds in simulation. On a board, temperature
-decides: the DS1307's tuning-fork crystal changes by about 0.034 ppm per C²
-away from 25 C (general knowledge), so a board 10 C away from where it was
-measured gains or loses about 3 ppm, some 0.3 s a day. The holdover check is
-there for that. A DS3231 (temperature compensated, with the same SQW and a
-32 kHz output) would hold far better, and is the plan for a custom board.
+* **Temperature.** Room temperature, usually a degree or two high. The chip
+  warms itself, and the board warms it more if it's mounted near the regulator.
+* **Pressure.** Your local station pressure. It is lower than the sea-level
+  figure weather reports give, by about 12 hPa per 100 m of altitude.
+* **Humidity.** Should follow a breath on the sensor up and back down within
+  a few seconds.
 
-The debug line shows `SQW ok off=<us> drift=<ppm>/<span s>`.
+### Commands
 
-The NTP server (`NtpServer`) runs in `ethTask`: the W5500 driver hands it each
-request on socket 6 as it is read, it reads the STM32 RTC (receive timestamp,
-then again for the transmit timestamp) and the reply goes straight back. Only
-client requests (mode 3, NTP v1-v4) are answered; control and private modes
-(`ntpq`, `monlist`) get nothing. The debug UART line shows its request and reply
-counts. Test it from a PC with `ntpdate -q <board IP>`, `sntp <board IP>` or
-`chronyc`/`ntpq` pointed at it.
+| Command | |
+|---------|---|
+| `s` | scan the I2C bus again, and read the chip IDs at 0x76 and 0x77 |
+| `e 131` / `e 40m` | the station's elevation, in feet or metres |
+| `b 30.54` | calibrate each sea-level reading to this many inHg now |
+| `o` | clear the calibration offsets |
+| `h` | the help |
 
-The DS1307 and SSD1306 transports share I2C1 and `i2c1_mutex`; each holds it
-for one transfer at a time. The W5500 has SPI1 and `spi1_mutex` to itself. The
-STM32 RTC is read and set under `rtc_mutex` (the NTP server waits at most 2 ms
-for it, then drops the request; the client asks again).
+### The debug log (D5)
 
-Static addressing: set `ETH_DHCP` to 0 and `ETH_STATIC_IP/MASK/GW` in `main.cpp`.
+Open the USB-serial adapter at **921600 8N1**, or put the Saleae's async serial
+analyser on D5. Each line is `<seq> <ms> <tag> <what> [<value>...]`
+(Claude-iTransport's `DebugLog.h`, at `ITRANSPORT_DEBUG` 2, which is set in the
+project's C and C++ defines).
 
-## Requirements of the iTransport drivers
+* `app start <rev> <dev>`: the chip's revision and device IDs.
+* `app chip-id <address> <id 0xD0> <id 0x00>`: what each scan found at 0x76
+  and 0x77, in the BME280's and the BMP390's ID registers.
+* `bme280 st <from> <to>`: the driver's state changes, as `bme280_state_t`
+  numbers. `bme280 fail`, `bus xfer-fail` and `bus-err` are I2C faults.
+* `app reading <T x100> <P Pa> <H x100>`: each BME280 reading, as integers.
+  For example, `app reading 2341 100987 4120` is 23.41 C, 1009.87 hPa,
+  41.20 %RH.
+* `sht31 st <from> <to>`: the SHT31 driver's states (`sht31_state_t` in
+  `SHT31.h`; 37 is its error state).
+* `app sht <T x100> <H x100>`: each SHT31 reading.
+* `bmp390 st <from> <to>`: the BMP390 driver's states (`bmp390_state_t` in
+  `bmp390.h`; 28 is its error state).
+* `app bmp <T x100> <P Pa>`: each BMP390 reading.
+* `app slp <Pa>`: the sea-level reading, once a second.
+* `app cal <offset Pa> <elevation m>`: a `b` calibration (the BME280's), and
+  `app bmp-cal <offset Pa>` the BMP390's.
+* `app cmd <char>`: a console command.
 
-* I2C1 event and error, USART1, SPI1, DMA1 channel 2/3 and EXTI9_5 (W5500 INTn) interrupts
-  enabled, priority 5
-  (numerically at or above `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY`, since they wake
-  FreeRTOS threads). Set in the .ioc and `stm32l4xx_hal_msp.c`.
-* `USE_HAL_I2C_REGISTER_CALLBACKS` and `USE_HAL_UART_REGISTER_CALLBACKS` are 0:
-  the HAL callbacks are defined in `iTransport/hw/stm32/src/Stm32*ItCallbacks.cpp`
-  (`USE_HAL_SPI_REGISTER_CALLBACKS` too).
-  Don't define `HAL_UART_RxCpltCallback` etc. in `main.cpp`.
-* The drivers are built inside their tasks (function statics), after
-  `i2c1_mutex`/`spi1_mutex` have been created and the peripherals initialised.
-* SPI1_RX on DMA1 channel 2 and SPI1_TX on DMA1 channel 3 (request 1, normal
-  mode, bytes): the W5500 moves up to 1 KB per transfer.
-* The FreeRTOS heap is 28 KB: the task stacks and the interface's queue, event
-  groups and stream buffers (2 sockets x 2 x 1 KB) come from it.
-* W5500 socket buffers: 2 KB each way for sockets 0, 1 (application), 6 (NTP)
-  and 7 (DHCP/DNS/SNTP client).
+A gap in `seq` means lines were dropped (the 1 KB ring was full). Set
+`ITRANSPORT_DEBUG` to 3 to see every I2C transfer as well, or to 0 to turn the
+log off.
+
+## Inside
+
+* **sensorTask:**
+  * scans for the BME280, then builds the driver at the address it found;
+  * runs `xbme280::main()`, which sleeps between steps: soft reset, chip ID,
+    calibration trim, then a forced measurement roughly every 0.2 s;
+  * takes the console's commands, and prints the reading once a second.
+  * A scan asked for while the driver has a transfer outstanding waits for it
+    to land: the driver holds the bus mutex across a transfer, and the mutex
+    isn't recursive.
+* **shtTask:** started by sensorTask when the first scan finds an SHT31. It
+  runs `xSHT31::main()` in periodic mode (the chip measures once a second; the
+  driver fetches each result), and publishes each reading through atomics.
+* **bmpTask:** likewise for a BMP390: `xbmp390::main()` (soft reset, chip ID,
+  calibration, then a forced measurement once a second), each reading published
+  as floats. sensorTask's second `SeaLevelBarometer` reads the published
+  pressure, since the driver's own double can't be read whole from another
+  thread.
+* **consoleTask:**
+  * hands the console ring to USART2 through `Stm32HalUartTransport`, which
+    also takes the keys;
+  * calls `dbg::poll()`, which sends the debug log to USART1.
+* **The system clock** is 80 MHz (MSI + PLL, trimmed by the LSE crystal X2).
+  Without the LSE, `SystemClock_Config()` stops in `Error_Handler()`.
+* **I2C1** runs at 100 kHz. The BME280 and BMP390 also take 400 kHz.
 
 ## Not verified
 
-* Not run on hardware yet; only built with arm-none-eabi-gcc 13 using the
-  CubeIDE flags (156 KB flash at -O0, 81 KB at -Os; 43 KB RAM). The drivers' own
-  host tests (`ds1307_test`, `mtk3339_test`, `nmea_parser_test`, `ssd1306_test`,
-  `W5500_test` with the UDP responder cases, `NtpServer_test`, `DhcpClient_test`,
-  `DnsClient_test`, `SntpClient_test`, `xNet_test`) pass at the vendored commits,
-  and on a PC `test/stm32_rtc_math_test.cpp` (the RTC register arithmetic and the
-  sub-second shift, against a model of the RTC from RM0394) and
-  `test/pps_math_test.cpp` (pairing, error, shift and calibration registers, and
-  the PPS loop against a drifting simulated RTC) and `test/ds1307_ref_test.cpp`
-  (labelling, the falling-edge check, the RAM record, drift measurement and
-  cold-start seeding against simulated DS1307s) pass.
-* Without PPS, NTP accuracy is limited by the GPS's NMEA timing: the RMC sentence
-  arrives some 100-500 ms after the second it names, depending on the module and
-  baud rate. Set `GPS_NMEA_DELAY_MS` (measure it with PPS: `nmea=` in the debug
-  line). With PPS the limit is the RTC's 122 us step and the loop's 250 us band
-  (simulated: within 0.2-0.3 ms of the PPS after 6 hours).
-* The PPS pin and its pairing with RMC haven't been tried on a module.
-* The DS1307's SQW: that its seconds tick at the falling edge is unverified
-  (the check above tests it on the board), and so is how long after an edge the
-  new time can be read. With a logic analyser: SQW on one channel, I2C on two
-  more; a read just after a falling edge should show the new second.
-* A cold start with SQW waits about 4 s for the check (8 s without SQW) before
-  the clock shows the time. After a reset (not a power cycle) a clock seeded
-  from the DS1307 serves "not synchronised" until GPS returns.
-* The .ioc was edited by hand for SPI1, DMA, the W5500 pins, the 80 MHz clock,
-  the RTC (LSE, PREDIV 3/8191), `rtc_mutex`, TIM2 input capture on PA0 and PA1
-  (W5500 INTn on PA8, EXTI9_5) and the third task. Open it in CubeMX and check it before generating code over
-  this project.
-* The clock setup expects the LSE crystal (X2, fitted on the NUCLEO-L432KC).
-  Without it `SystemClock_Config()` stops in `Error_Handler()`.
-* The DS1307 is a 100 kHz part. I2C1 runs at about 100 kHz (`Timing`
-  0x10909CEC at an 80 MHz PCLK1); keep it in standard mode if the clock changes.
-* Whether every MT3333 module acknowledges PMTK300 has not been checked. If one
-  rejects it, the driver reports the configuration as `rejected` on the debug UART
-  and carries on with what the module sends.
+* **On the board:** the BME280 part ran on a NUCLEO-L432KC on 2026-10-18, and a
+  Saleae capture checked it:
+  * the chip at 0x77 with ID 0x60;
+  * the configuration bytes;
+  * a reading every 201-202 ms with no faults;
+  * the compensation, recomputed by hand from the raw bytes.
+
+  The firmware with the SHT31, the BMP390 and the sea-level readings hasn't
+  run yet.
+  * Built with arm-none-eabi-gcc 13 using the CubeIDE flags, without warnings:
+    73 KB flash at -Os (112 KB at -O0), 27 KB RAM. `strtof` and `pow` (newlib)
+    account for about 7 KB of it.
+  * The drivers' host tests pass in Claude-iTransport at `e0c5a1a`:
+    `BME280_test`, `SHT31_test`, `bmp390_test` (simulated chips), and
+    `sea_level_barometer_test`. `bmp390_ref_test` runs Bosch's BMP3 API on the
+    same simulated BMP390; the driver agrees with it.
+  * Neither the SHT31 nor the BMP390 has been run on a chip by this firmware,
+    and the BMP390 driver hasn't run on a chip at all.
+* The chip IDs (0x60 BME280, 0x58 BMP280, 0x61 BME680) and the BME280's
+  ranges are from Bosch's datasheets as the drivers and general knowledge have
+  them, not re-read here. The BMP390's (0x60 in register 0x00, 0x50 BMP388) are
+  from Bosch's BMP3 Sensor API. What a BME280 holds in register 0x00, and a
+  BMP390 in 0xD0, isn't known; the scan trusts 0xD0 first.
+* The `.ioc` was edited by hand to match:
+  * I2C1, USART1 (921600, PB6/PB7), and USART2 with its interrupt;
+  * LD3;
+  * sensorTask, consoleTask and their mutexes.
+
+  shtTask and bmpTask aren't in it: sensorTask starts them at run time with
+  `osThreadNew()`.
+
+  Open it in CubeMX and check it before generating code over the project.

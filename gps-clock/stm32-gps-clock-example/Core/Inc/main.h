@@ -57,15 +57,15 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define DS1307_SQW_Pin GPIO_PIN_1
-#define DS1307_SQW_GPIO_Port GPIOA
-#define W5500_RST_Pin GPIO_PIN_3
-#define W5500_RST_GPIO_Port GPIOA
-#define W5500_CS_Pin GPIO_PIN_4
-#define W5500_CS_GPIO_Port GPIOA
-#define W5500_INT_Pin GPIO_PIN_8
-#define W5500_INT_GPIO_Port GPIOA
-#define W5500_INT_EXTI_IRQn EXTI9_5_IRQn
+/* NUCLEO-L432KC pins (the Nucleo-32 header names from memory of ST's UM1956,
+   not checked here). I2C1 is PA9 (D1, SCL) / PA10 (D0, SDA); the console is
+   USART2 on PA2/PA15, the ST-LINK's virtual COM port. */
+#define DBG_TX_Pin GPIO_PIN_6           /* D5, USART1_TX -> the debug log, 921600 8N1 (a USB-serial adapter's RX, or the Saleae) */
+#define DBG_TX_GPIO_Port GPIOB
+#define DBG_RX_Pin GPIO_PIN_7           /* D4, USART1_RX (not used; pulled up) */
+#define DBG_RX_GPIO_Port GPIOB
+#define LD3_Pin GPIO_PIN_3              /* LD3, green: toggles on each BME280 reading */
+#define LD3_GPIO_Port GPIOB
 
 /* USER CODE BEGIN Private defines */
 
