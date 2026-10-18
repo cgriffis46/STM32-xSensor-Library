@@ -200,10 +200,20 @@ regeneration ever loses the calls, put the three lines back in those blocks.
 
 ## Not verified
 
-* **On the board:**
-  * This BME680 firmware hasn't run on the board yet.
-  * The BME680 driver hasn't run on any chip: it has run against Bosch's
-    BME68x API on a simulated chip only.
+* **On the board:** this firmware ran on the NUCLEO-L432KC on 2026-10-18,
+  checked with Saleae captures.
+  * The BME680 was found at 0x77 (0x61 in 0xD0, variant 0x00), and the first
+    reading came at 206 ms.
+  * A reading every 3 s, with no faults:
+    * 25.66 C (78.2 F), 32 %RH;
+    * 1030.6 hPa, which is 30.57 inHg at sea level for 40 m;
+    * the Davis console at the same time: 79 F and 30.53 inHg.
+  * The gas resistance was 1.2-2.5 kOhm in the first run and 24-28 kOhm in
+    the next, still rising: a new sensor settling in. One reading's gas value
+    was checked by hand from the bytes on the bus, with Bosch's formula
+    (1240 ohm, as the driver gave).
+  * Not yet checked: gas values after hours of running, or anything against a
+    calibrated reference.
   * Earlier bring-ups ran on this NUCLEO-L432KC on 2026-10-18: the BME280,
     then the BMP390 and SHT31, checked with Saleae captures.
 * **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
