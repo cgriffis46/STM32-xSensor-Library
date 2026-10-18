@@ -2,34 +2,30 @@
 /**
   ******************************************************************************
   * @file           : main.cpp
-  * @brief          : BME280, BMP390 and SHT31 bring-up on the NUCLEO-L432KC
+  * @brief          : BMP390 and SHT31 bring-up on the NUCLEO-L432KC
   *
-  *  A live test of three sensors on I2C1: a BME280 (temperature, pressure,
-  *  humidity) and, if they answer, a BMP390 (temperature, pressure) and an
-  *  SHT31 (temperature, humidity) to compare it with. Claude-iTransport's
-  *  non-blocking drivers (xbme280<Stm32HalI2CTransport> in forced mode,
-  *  about five readings a second; xbmp390<Stm32HalI2CTransport> forced
-  *  once a second and xSHT31<Stm32HalI2CTransport> in periodic mode, one a
-  *  second, each in its own task; see iTransport/SOURCE.txt). Each
-  *  barometer's station pressure also goes through a SeaLevelBarometer
-  *  (isensor/inc): the altimeter setting for the station's elevation, the
-  *  sea-level figure a Davis console or weather.gov shows, with a
-  *  calibration offset the console can set against such a reference. Once
-  *  a second the latest readings go to the ST-LINK's virtual COM port
-  *  (USART2, 115200 8N1), flagged where outside the BME280's range.
+  *  A live test of two sensors on I2C1: a BMP390 (pressure, temperature)
+  *  and an SHT31 (temperature, humidity) beside it, to compare the two
+  *  temperatures. Claude-iTransport's non-blocking drivers
+  *  (xbmp390<Stm32HalI2CTransport> forced once a second, in sensorTask;
+  *  xSHT31<Stm32HalI2CTransport> in periodic mode, one a second, in its
+  *  own task; see iTransport/SOURCE.txt). The BMP390's station pressure
+  *  also goes through a SeaLevelBarometer (isensor/inc): the altimeter
+  *  setting for the station's elevation, the sea-level figure a Davis
+  *  console or weather.gov shows, with a calibration offset the console
+  *  can set against such a reference. Once a second the latest readings
+  *  go to the ST-LINK's virtual COM port (USART2, 115200 8N1).
   *
   *  At start-up the I2C bus is scanned and two ID registers read at 0x76
-  *  and 0x77 (the address depends on the board's SDO pin, so the BME280
-  *  and the BMP390 must be on different ones): 0x60 in register 0xD0 is a
-  *  BME280 (0x58 a BMP280, which has no humidity and is on many boards
-  *  sold as BME280; 0x61 a BME680), 0x60 in register 0x00 a BMP390 (0x50
-  *  a BMP388). The scan repeats every 2 s until a BME280 answers. A BMP390
-  *  and an SHT31 (0x44 or 0x45) found by the first good scan get their
-  *  tasks.
+  *  and 0x77: 0x60 in register 0x00 is a BMP390 (0x50 a BMP388, which the
+  *  same driver runs); 0x60, 0x58 or 0x61 in register 0xD0 a BME280,
+  *  BMP280 or BME680, reported but not driven. An SHT31 answers at 0x44
+  *  or 0x45. The scan repeats every 2 s until a BMP390 or an SHT31
+  *  answers; each one found then gets its driver.
   *
   *  A debug log (Claude-iTransport's DebugLog.h, at ITRANSPORT_DEBUG 2, set
   *  in the project's defines) goes out on USART1 TX, D5 (PB6), at 921600
-  *  8N1: the drivers' state changes and I2C faults ("bme280", "bmp390", "sht31", "bus"), and
+  *  8N1: the drivers' state changes and I2C faults ("bmp390", "sht31", "bus"), and
   *  this application's events ("app"). Read it with a 3.3 V USB-serial
   *  adapter or the Saleae's async serial analyser.
   *
@@ -37,13 +33,13 @@
   *  in the repository's history at commit eb4b352.
   *
   *  Wiring (NUCLEO-L432KC):
-  *    I2C1_SCL  PA9  (D1)  -> BME280 SCL (SCK), BMP390 SCK, SHT31 SCL
-  *    I2C1_SDA  PA10 (D0)  -> BME280 SDA (SDI), BMP390 SDI, SHT31 SDA
-  *    3V3, GND             -> BME280, BMP390 and SHT31 VCC/VIN, GND
-  *    (BME280 SDO and BMP390 SDO: one to GND (0x76), the other to 3V3 (0x77))
+  *    I2C1_SCL  PA9  (D1)  -> BMP390 SCK, SHT31 SCL
+  *    I2C1_SDA  PA10 (D0)  -> BMP390 SDI, SHT31 SDA
+  *    3V3, GND             -> BMP390 and SHT31 VIN, GND
+  *    (BMP390 SDO: 0x77 high or open on most boards, 0x76 to GND; either is found)
   *    USART2    PA2/PA15   <> ST-LINK virtual COM port (the USB cable)
   *    USART1_TX PB6  (D5)  -> debug log, 921600 8N1 (USART1_RX PB7, D4, unused)
-  *    LD3       PB3        green LED: toggles on each reading
+  *    LD3       PB3        green LED: toggles on each BMP390 reading
   ******************************************************************************
   * @attention
   *
@@ -73,7 +69,6 @@
 #include "Stm32HalUartTransport.h"
 #include "Stm32DebugPort.h"
 #include "DebugLog.h"
-#include "xBME280.h"
 #include "xSHT31.h"
 #include "xbmp390.h"
 #include "SeaLevelBarometer.h"
@@ -81,15 +76,18 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef BME280::xbme280<Stm32HalI2CTransport> Bme280Sensor;
 typedef xSHT31<Stm32HalI2CTransport> Sht31Sensor;
 typedef BMP390::xbmp390<Stm32HalI2CTransport> Bmp390Sensor;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// The BME280's ID register (0xD0) and what it holds for the parts that
-// look alike (Bosch's datasheets, as the driver and general knowledge have them)
+// The BMP390's two addresses (its SDO pin)
+#define BOSCH_ADDR_LOW          0x76
+#define BOSCH_ADDR_HIGH         0x77
+// The ID register of Bosch's older chips (0xD0) and what it holds for them
+// (Bosch's datasheets, as the drivers and general knowledge have them):
+// only reported here
 #define CHIP_ID_REG             0xD0
 #define CHIP_ID_BME280          0x60
 #define CHIP_ID_BMP280          0x58
@@ -107,7 +105,7 @@ typedef BMP390::xbmp390<Stm32HalI2CTransport> Bmp390Sensor;
 #define STATION_ELEVATION_M     40.0f
 #define M_PER_FT                0.3048f
 
-#define SCAN_RETRY_MS           2000UL     // no BME280 found: scan again this often
+#define SCAN_RETRY_MS           2000UL     // neither sensor found: scan again this often
 #define READING_STALE_MS        3000UL     // no reading for this long: say so
 
 // The debug log's UART (USART1): fast, since level 2 logs every state change
@@ -139,13 +137,6 @@ const osThreadAttr_t sensorTask_attributes = {
 osThreadId_t shtTaskHandle;
 const osThreadAttr_t shtTask_attributes = {
   .name = "shtTask",
-  .stack_size = 384 * 4,
-  .priority = (osPriority_t) osPriorityNormal,
-};
-/* Definitions for bmpTask (started by sensorTask when a BMP390 answers) */
-osThreadId_t bmpTaskHandle;
-const osThreadAttr_t bmpTask_attributes = {
-  .name = "bmpTask",
   .stack_size = 384 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
@@ -185,17 +176,10 @@ static std::atomic<float> g_shtT{NAN}, g_shtH{NAN};
 static std::atomic<uint32_t> g_shtReadings{0}, g_shtTick{0};
 static std::atomic<int> g_shtState{0};
 
-// The BMP390, likewise (written by bmpTask only)
-static std::atomic<uint8_t> g_bmpAddr{0};
-static std::atomic<float> g_bmpT{NAN}, g_bmpP{NAN};
-static std::atomic<uint32_t> g_bmpReadings{0}, g_bmpTick{0};
-static std::atomic<int> g_bmpState{0};
-
-// The BMP390's pressure as a Barometer for sensorTask's SeaLevelBarometer:
-// the latest value bmpTask published (the driver's own is a double,
-// which another thread can't read whole)
-struct PublishedBmpPressure : Barometer {
-  float getPressure() const override { return g_bmpP.load(); }
+// Stands in for the BMP390 when none answered: NAN, so the sea-level
+// reading is NAN too
+struct NoBarometer : Barometer {
+  float getPressure() const override { return NAN; }
 };
 /* USER CODE END PV */
 
@@ -207,7 +191,6 @@ static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
 void StartSensorTask(void *argument);
 void StartShtTask(void *argument);
-void StartBmpTask(void *argument);
 void StartConsoleTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -270,12 +253,12 @@ static ConsoleKeys consoleKeys;
 
 static void printHelp(void)
 {
-  consolePrint("\r\nNUCLEO-L432KC BME280/BMP390/SHT31 bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), 100 kHz\r\n"
+  consolePrint("\r\nNUCLEO-L432KC BMP390/SHT31 bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), 100 kHz\r\n"
                "commands (Enter to finish; turn on your terminal's local echo):\r\n"
                "  s          scan the I2C bus and read the chip IDs at 0x76 and 0x77\r\n"
-               "  e 131      the station's elevation in feet (e 40m for metres), for the sea-level readings\r\n"
-               "  b 30.54    calibrate: make each sea-level reading this many inHg now (from weather.gov, say)\r\n"
-               "  o          clear the calibration offsets\r\n"
+               "  e 131      the station's elevation in feet (e 40m for metres), for the sea-level reading\r\n"
+               "  b 30.54    calibrate: make the sea-level reading this many inHg now (from weather.gov, say)\r\n"
+               "  o          clear the calibration offset\r\n"
                "  h          this help\r\n\r\n");
 }
 
@@ -305,18 +288,18 @@ static const char *chipName(uint8_t id)
   }
 }
 
-// Every address 0x08..0x77 that acknowledges, and the chip ID at 0x76 and
-// 0x77. Blocking HAL calls under i2c1_mutex, about 15 ms. The mutex is
-// not recursive and a driver holds it from issuing a transfer until it
-// sees it land, so call this only from a thread with no transfer
-// outstanding (sensorTask waits for a state of its driver's with none). Returns the
-// address of a BME280, or 0 (and 0 if the bus stayed busy); a BMP390's
-// (or BMP388's) and an SHT31's through bmpAddr and shtAddr (0 if none).
-static uint8_t scanBus(uint8_t *shtAddr = nullptr, uint8_t *bmpAddr = nullptr)
+// Every address 0x08..0x77 that acknowledges, and two ID registers at 0x76
+// and 0x77: 0x00 (the BMP390's) and 0xD0 (the older Bosch chips'). Blocking
+// HAL calls under i2c1_mutex, about 15 ms. The mutex is not recursive and
+// a driver holds it from issuing a transfer until it sees it land, so call
+// this only from a thread with no transfer outstanding (sensorTask waits
+// for a state of its driver's with none). Returns the address of a BMP390
+// (or BMP388), or 0 (and 0 if the bus stayed busy); an SHT31's through
+// shtAddr (0 if none).
+static uint8_t scanBus(uint8_t *shtAddr = nullptr)
 {
   uint8_t found = 0;
   uint8_t sht = 0;
-  uint8_t bmp = 0;
   char list[160];
   size_t n = 0;
   list[0] = 0;
@@ -324,50 +307,53 @@ static uint8_t scanBus(uint8_t *shtAddr = nullptr, uint8_t *bmpAddr = nullptr)
     consolePrint("I2C bus busy: no scan\r\n");
     return 0;
   }
+  bool acked[2] = {false, false};
   for (uint8_t a = 0x08; a <= 0x77; ++a) {
     if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK) {
       if (n + 6 < sizeof(list))
         n += (size_t) snprintf(list + n, sizeof(list) - n, " 0x%02X", a);
       if ((a == SHT31_ADDR_A || a == SHT31_ADDR_B) && sht == 0)
         sht = a;
+      if (a == BOSCH_ADDR_LOW || a == BOSCH_ADDR_HIGH)
+        acked[a - BOSCH_ADDR_LOW] = true;
     }
   }
-  // Both ID registers at each address: 0xD0 (the BME280's) and 0x00 (the BMP390's)
-  uint8_t ids[2] = {0, 0}, ids3[2] = {0, 0};
+  // Both ID registers at each address that answered
+  uint8_t ids3[2] = {0, 0}, ids[2] = {0, 0};
   bool idOk[2] = {false, false};
   for (int i = 0; i < 2; ++i) {
-    const uint8_t a = (uint8_t)(BME280::bme280_i2c_addr_1 + i);
-    idOk[i] = HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(a << 1), CHIP_ID_REG, I2C_MEMADD_SIZE_8BIT, &ids[i], 1, 10) == HAL_OK
-              && HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(a << 1), BMP3_CHIP_ID_REG, I2C_MEMADD_SIZE_8BIT, &ids3[i], 1, 10) == HAL_OK;
+    const uint8_t a = (uint8_t)(BOSCH_ADDR_LOW + i);
+    if (!acked[i])
+      continue;
+    idOk[i] = HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(a << 1), BMP3_CHIP_ID_REG, I2C_MEMADD_SIZE_8BIT, &ids3[i], 1, 10) == HAL_OK
+              && HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(a << 1), CHIP_ID_REG, I2C_MEMADD_SIZE_8BIT, &ids[i], 1, 10) == HAL_OK;
   }
   osMutexRelease(i2c1_mutexHandle);
 
   consolePrint("I2C scan:%s\r\n", n ? list : " nothing answered (check SDA D0, SCL D1, 3V3, GND, pull-ups)");
   for (int i = 0; i < 2; ++i) {
-    const uint8_t a = (uint8_t)(BME280::bme280_i2c_addr_1 + i);
+    const uint8_t a = (uint8_t)(BOSCH_ADDR_LOW + i);
     if (!idOk[i])
       continue;
-    DBG_EVENT("app", "chip-id", (int32_t) a, (int32_t) ids[i], (int32_t) ids3[i]);
-    // The BME280's register first: it is the one this example needs
-    if (ids[i] == CHIP_ID_BME280 || ids[i] == CHIP_ID_BMP280 || ids[i] == CHIP_ID_BME680) {
-      consolePrint("  0x%02X: chip ID 0x%02X (register 0xD0) = %s\r\n", a, ids[i], chipName(ids[i]));
-      if (ids[i] == CHIP_ID_BME280 && found == 0)
-        found = a;
-    } else if (ids3[i] == BMP390_CHIP_ID || ids3[i] == BMP388_CHIP_ID) {
+    DBG_EVENT("app", "chip-id", (int32_t) a, (int32_t) ids3[i], (int32_t) ids[i]);
+    if (ids3[i] == BMP390_CHIP_ID || ids3[i] == BMP388_CHIP_ID) {
       consolePrint("  0x%02X: chip ID 0x%02X (register 0x00) = %s\r\n", a, ids3[i],
                    ids3[i] == BMP390_CHIP_ID ? "BMP390" : "BMP388");
-      if (bmp == 0)
-        bmp = a;
+      if (found == 0)
+        found = a;
+    } else if (ids[i] == CHIP_ID_BME280 || ids[i] == CHIP_ID_BMP280 || ids[i] == CHIP_ID_BME680) {
+      consolePrint("  0x%02X: chip ID 0x%02X (register 0xD0) = %s: not driven by this firmware\r\n", a, ids[i],
+                   chipName(ids[i]));
     } else {
-      consolePrint("  0x%02X: chip IDs 0x%02X (0xD0), 0x%02X (0x00): unknown\r\n", a, ids[i], ids3[i]);
+      // Two chips at one address read as the AND of their answers
+      consolePrint("  0x%02X: chip IDs 0x%02X (0x00), 0x%02X (0xD0): unknown; two chips at this address?\r\n", a,
+                   ids3[i], ids[i]);
     }
   }
   if (sht != 0)
     consolePrint("  0x%02X: answers where an SHT31 would be (it has no ID register to check)\r\n", sht);
   if (shtAddr != nullptr)
     *shtAddr = sht;
-  if (bmpAddr != nullptr)
-    *bmpAddr = bmp;
   return found;
 }
 /* USER CODE END 0 */
@@ -545,7 +531,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x10909CEC;   // 100 kHz (standard mode) at 80 MHz; the BME280 also takes 400 kHz
+  hi2c1.Init.Timing = 0x10909CEC;   // 100 kHz (standard mode) at 80 MHz; the BMP390 and SHT31 also take 400 kHz
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -685,9 +671,10 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN Header_StartSensorTask */
 /**
-  * @brief  Finds the BME280 (bus scan, chip ID), then runs its driver,
-  *         takes the console's commands and prints the latest reading
-  *         once a second.
+  * @brief  Finds the BMP390 and the SHT31 (bus scan, chip ID), runs the
+  *         BMP390's driver, starts shtTask for the SHT31, takes the
+  *         console's commands and prints the latest readings once a
+  *         second.
   * @param  argument: Not used
   * @retval None
   */
@@ -697,50 +684,47 @@ void StartSensorTask(void *argument)
   /* USER CODE BEGIN 5 */
   printHelp();
 
-  // Find it first: 0x76 or 0x77, by its chip ID
+  // Find them first: the BMP390 at 0x76 or 0x77 by its chip ID, the
+  // SHT31 at 0x44 or 0x45
   uint8_t addr = 0;
-  uint8_t shtAddr = 0, bmpAddr = 0;
-  while ((addr = scanBus(&shtAddr, &bmpAddr)) == 0) {
-    consolePrint("no BME280 (chip ID 0x60) at 0x76 or 0x77; scanning again in %lu s\r\n",
-                 (unsigned long)(SCAN_RETRY_MS / 1000));
+  uint8_t shtAddr = 0;
+  while ((addr = scanBus(&shtAddr)) == 0 && shtAddr == 0) {
+    consolePrint("no BMP390 (chip ID 0x60 in register 0x00) at 0x76 or 0x77, no SHT31 at 0x44 or 0x45;"
+                 " scanning again in %lu s\r\n", (unsigned long)(SCAN_RETRY_MS / 1000));
     osDelay(SCAN_RETRY_MS);
   }
-  consolePrint("BME280 at 0x%02X: forced mode, pressure x4, temperature x1, humidity x1, no filter\r\n", addr);
   if (shtAddr != 0) {
     g_shtAddr.store(shtAddr);
     shtTaskHandle = osThreadNew(StartShtTask, NULL, &shtTask_attributes);
     consolePrint("SHT31 at 0x%02X: periodic mode, 1 a second, high repeatability\r\n", shtAddr);
   } else {
-    consolePrint("no SHT31 at 0x44 or 0x45\r\n");
+    consolePrint("no SHT31 at 0x44 or 0x45: BMP390 only\r\n");
   }
-  if (bmpAddr != 0) {
-    g_bmpAddr.store(bmpAddr);
-    bmpTaskHandle = osThreadNew(StartBmpTask, NULL, &bmpTask_attributes);
-    consolePrint("BMP390 at 0x%02X: forced, 1 a second, pressure x8, temperature x1, no filter\r\n", bmpAddr);
+
+  // The BMP390: forced, once a second; pressure x8, temperature x1, no
+  // filter (each reading on its own). Built here only if it answered: its
+  // transport needs i2c1_mutex and the address just found.
+  Bmp390Sensor *bmp = nullptr;
+  if (addr != 0) {
+    BMP390::bmp390_param_t param;
+    param.osr_pressure = BMP390::bmp390_osr_8x;
+    param.osr_temperature = BMP390::bmp390_osr_1x;
+    param.iir = BMP390::bmp390_iir_off;
+    param.period_ms = 1000;
+    static Bmp390Sensor sensor(param, &hi2c1, addr, i2c1_mutexHandle);
+    sensor.setDebugTag("bmp390");           // its state changes and faults in the debug log
+    bmp = &sensor;
+    consolePrint("BMP390 at 0x%02X: forced, 1 a second, pressure x8, temperature x1, no filter\r\n", addr);
   } else {
-    consolePrint("no BMP390 at 0x76 or 0x77\r\n");
+    consolePrint("no BMP390 at 0x76 or 0x77: SHT31 only\r\n");
   }
-
-  // Forced mode: a measurement whenever the driver asks for one (about
-  // every 0.2 s: its 100 ms pause, then up to 100 ms of conversion)
-  BME280::bme280_param_t param;
-  param._osrs_p_t = BME280::bme280_osrs_p_4x;
-  param._osrs_t_t = BME280::bme280_osrs_t_1x;
-  param._osrs_h_t = BME280::bme280_osrs_h_1x;
-  param._mode_t = BME280::bme280_forced_mode;
-  param._sb_t = BME280::bme280_sb_1000;      // normal mode only; not used here
-  param._filter_t = BME280::bme280_filter_off;
-  // Built here: the transport needs i2c1_mutex and the address just found
-  static Bme280Sensor sensor(param, &hi2c1, addr, i2c1_mutexHandle);
-  sensor.setDebugTag("bme280");             // its state changes and faults in the debug log
   // Its pressure brought to sea level (the altimeter setting) for the
-  // station's elevation; the offset is the console's b command's
-  static SeaLevelBarometer slp(sensor, STATION_ELEVATION_M);
-  // The BMP390's, from what bmpTask publishes; same elevation, its own offset
-  static PublishedBmpPressure bmpPressure;
-  static SeaLevelBarometer bmpSlp(bmpPressure, STATION_ELEVATION_M);
+  // station's elevation; the offset is the console's b command's. Its
+  // getters are const, so it reads the driver directly (this thread).
+  static NoBarometer noBarometer;
+  static SeaLevelBarometer slp(bmp != nullptr ? (const Barometer &) *bmp : (const Barometer &) noBarometer, STATION_ELEVATION_M);
 
-  double t = NAN, p = NAN, h = NAN;
+  double t = NAN, p = NAN;
   uint32_t readings = 0;
   uint32_t lastReadingTick = 0;
   uint32_t lastPrintTick = osKernelGetTickCount();
@@ -749,13 +733,15 @@ void StartSensorTask(void *argument)
 
   for(;;)
   {
-    sensor.main(osKernelGetTickCount());    // sleeps inside, up to 100 ms
+    if (bmp != nullptr)
+      bmp->main(osKernelGetTickCount());    // sleeps inside, up to 100 ms
+    else
+      osDelay(100);
     const uint32_t tick = osKernelGetTickCount();
 
-    if (sensor.newData()) {
-      sensor.GetTemperature(&t);
-      sensor.GetPressure(&p);
-      sensor.GetHumidity(&h);
+    if (bmp != nullptr && bmp->newData()) {
+      bmp->GetTemperature(&t);
+      bmp->GetPressure(&p);
       ++readings;
       lastReadingTick = tick;
       if (!isnan(t)) {
@@ -763,7 +749,7 @@ void StartSensorTask(void *argument)
         if (isnan(tMax) || t > tMax) tMax = t;
       }
       HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
-      DBG_EVENT("app", "reading", (int32_t) lround(t * 100), (int32_t) lround(p), (int32_t) lround(h * 100));
+      DBG_EVENT("app", "reading", (int32_t) lround(t * 100), (int32_t) lround(p));
     }
 
     // A command typed on the console
@@ -783,7 +769,6 @@ void StartSensorTask(void *argument)
           consolePrint("e <feet> or e <metres>m, e.g. e 131 or e 40m\r\n");
         } else {
           slp.setElevation(metres ? v : v * M_PER_FT);
-          bmpSlp.setElevation(slp.elevation());
           char m[16];
           formatFixed(m, sizeof(m), slp.elevation(), 1);
           consolePrint("elevation %s m (%ld ft); the calibration offset is kept: b again if it was set at another elevation\r\n",
@@ -798,22 +783,12 @@ void StartSensorTask(void *argument)
         } else {
           char o[16];
           formatFixed(o, sizeof(o), slp.offset() / 100.0, 2);
-          consolePrint("calibrated: BME280 offset %s hPa added to its station pressure\r\n", o);
+          consolePrint("calibrated: offset %s hPa added to the station pressure\r\n", o);
           DBG_EVENT("app", "cal", (int32_t) lroundf(slp.offset()), (int32_t) lroundf(slp.elevation()));
-          if (g_bmpAddr.load() != 0) {
-            if (bmpSlp.calibrateTo(baro::inHgToPa(inHg))) {
-              formatFixed(o, sizeof(o), bmpSlp.offset() / 100.0, 2);
-              consolePrint("calibrated: BMP390 offset %s hPa\r\n", o);
-              DBG_EVENT("app", "bmp-cal", (int32_t) lroundf(bmpSlp.offset()));
-            } else {
-              consolePrint("BMP390 not calibrated: no reading yet\r\n");
-            }
-          }
         }
       } else if (cmd[0] == 'o' && cmd[1] == 0) {
         slp.setOffset(0.0f);
-        bmpSlp.setOffset(0.0f);
-        consolePrint("calibration offsets cleared\r\n");
+        consolePrint("calibration offset cleared\r\n");
       } else if ((cmd[0] == 'h' || cmd[0] == '?') && cmd[1] == 0) {
         printHelp();
       } else {
@@ -825,45 +800,44 @@ void StartSensorTask(void *argument)
     // outstanding (it holds i2c1_mutex from issuing one until it sees it
     // land, and the mutex isn't recursive). It spends most of its time in these.
     if (scanPending) {
-      const BME280::bme280_state_t st = sensor.state();
-      if (st == BME280::bme280_sleeping || st == BME280::bme280_measuring || st == BME280::bme280_error
-          || st == BME280::bme280_reset_settle || st == BME280::bme280_im_update_pause) {
+      const BMP390::bmp390_state_t st = bmp != nullptr ? bmp->state() : BMP390::bmp390_done_state;
+      if (st == BMP390::bmp390_done_state || st == BMP390::bmp390_measuring_state
+          || st == BMP390::bmp390_status_poll_state || st == BMP390::bmp390_cmd_rdy_poll_state
+          || st == BMP390::bmp390_reset_settle_state || st == BMP390::bmp390_error_state) {
         scanPending = false;
         (void) scanBus();
       }
     }
 
-    // Once a second: the latest reading, flagged where it is outside the
-    // BME280's range (-40..85 C, 300..1100 hPa; humidity pinned at 0 or
-    // 100 % is the compensation's clamp, so suspect too)
+    // Once a second: the latest readings, flagged where outside the
+    // BMP390's range (Bosch's API clamps to -40..85 C, 300..1250 hPa)
     if (tick - lastPrintTick >= 1000) {
       lastPrintTick = tick;
-      const bool stale = readings == 0 || tick - lastReadingTick > READING_STALE_MS;
-      if (stale) {
-        consolePrint("BME280 at 0x%02X: no reading%s (driver state %d%s)\r\n", addr,
-                     readings == 0 ? " yet" : " for 3 s", (int) sensor.state(),
-                     sensor.state() == BME280::bme280_error ? ", error: not answering, or a wrong chip ID" : "");
-      } else {
-        char ts[16], ps[16], hs[16], lo[16], hi[16];
-        formatFixed(ts, sizeof(ts), t, 2);
-        formatFixed(ps, sizeof(ps), p / 100.0, 2);
-        formatFixed(hs, sizeof(hs), h, 1);
-        formatFixed(lo, sizeof(lo), tMin, 2);
-        formatFixed(hi, sizeof(hi), tMax, 2);
-        const bool tBad = !(t >= -40.0 && t <= 85.0);
-        const bool pBad = !(p >= 30000.0 && p <= 110000.0);
-        const bool hBad = !(h > 0.0 && h < 100.0);
-        char tf[16], sl[16], sh[16], el[16], of[16];
-        formatFixed(tf, sizeof(tf), t * 9.0 / 5.0 + 32.0, 1);
-        const float alt = slp.getPressure();
-        formatFixed(sl, sizeof(sl), baro::paToInHg(alt), 2);
-        formatFixed(sh, sizeof(sh), alt / 100.0, 2);
-        formatFixed(el, sizeof(el), slp.elevation(), 0);
-        formatFixed(of, sizeof(of), slp.offset() / 100.0, 2);
-        consolePrint("BME280 T %s C (%s F)%s  H %s %%RH%s  P %s hPa%s = %s inHg / %s hPa at sea level (%s m, cal %s hPa)"
-                     " | %lu readings, T %s..%s C\r\n", ts, tf, tBad ? " (?)" : "", hs, hBad ? " (?)" : "", ps,
-                     pBad ? " (?)" : "", sl, sh, el, of, (unsigned long) readings, lo, hi);
-        DBG_EVENT("app", "slp", (int32_t) lroundf(alt));
+      if (bmp != nullptr) {
+        const bool stale = readings == 0 || tick - lastReadingTick > READING_STALE_MS;
+        if (stale) {
+          consolePrint("BMP390 at 0x%02X: no reading%s (driver state %d%s)\r\n", addr,
+                       readings == 0 ? " yet" : " for 3 s", (int) bmp->state(),
+                       bmp->state() == BMP390::bmp390_error_state ? ", error: not answering, or a wrong chip ID" : "");
+        } else {
+          char ts[16], tf[16], ps[16], sl[16], sh[16], el[16], of[16], lo[16], hi[16];
+          formatFixed(ts, sizeof(ts), t, 2);
+          formatFixed(tf, sizeof(tf), t * 9.0 / 5.0 + 32.0, 1);
+          formatFixed(ps, sizeof(ps), p / 100.0, 2);
+          const float alt = slp.getPressure();
+          formatFixed(sl, sizeof(sl), baro::paToInHg(alt), 2);
+          formatFixed(sh, sizeof(sh), alt / 100.0, 2);
+          formatFixed(el, sizeof(el), slp.elevation(), 0);
+          formatFixed(of, sizeof(of), slp.offset() / 100.0, 2);
+          formatFixed(lo, sizeof(lo), tMin, 2);
+          formatFixed(hi, sizeof(hi), tMax, 2);
+          const bool tBad = t <= -40.0 || t >= 85.0;            // pinned at Bosch's clamp
+          const bool pBad = p <= 30000.0 || p >= 125000.0;
+          consolePrint("BMP390 T %s C (%s F)%s  P %s hPa%s = %s inHg / %s hPa at sea level (%s m, cal %s hPa)"
+                       " | %lu readings, T %s..%s C\r\n", ts, tf, tBad ? " (?)" : "", ps, pBad ? " (?)" : "", sl, sh,
+                       el, of, (unsigned long) readings, lo, hi);
+          DBG_EVENT("app", "slp", (int32_t) lroundf(alt));
+        }
       }
       // The SHT31 beside it
       const uint32_t shtN = g_shtReadings.load();
@@ -873,37 +847,13 @@ void StartSensorTask(void *argument)
           consolePrint("SHT31  no reading%s (driver state %d%s)\r\n", shtN == 0 ? " yet" : " for 3 s", g_shtState.load(),
                        g_shtState.load() == sht31_error_state ? ", error: not answering" : "");
         } else {
-          char a[16], af[16], b[16], dt[16], dh[16];
+          char a[16], af[16], b[16], dt[16];
           formatFixed(a, sizeof(a), st, 2);
           formatFixed(af, sizeof(af), st * 9.0 / 5.0 + 32.0, 1);
           formatFixed(b, sizeof(b), shh, 1);
           formatFixed(dt, sizeof(dt), t - st, 2);
-          formatFixed(dh, sizeof(dh), h - shh, 1);
-          consolePrint("SHT31  T %s C (%s F)  H %s %%RH | BME280 - SHT31: T %s C, H %s %%RH | %lu readings\r\n", a, af, b, dt,
-                       dh, (unsigned long) shtN);
-        }
-      }
-      // And the BMP390
-      const uint32_t bmpN = g_bmpReadings.load();
-      if (g_bmpAddr.load() != 0) {
-        const float bt = g_bmpT.load(), bp = g_bmpP.load();
-        if (bmpN == 0 || tick - g_bmpTick.load() > READING_STALE_MS) {
-          consolePrint("BMP390 no reading%s (driver state %d%s)\r\n", bmpN == 0 ? " yet" : " for 3 s", g_bmpState.load(),
-                       g_bmpState.load() == BMP390::bmp390_error_state ? ", error: not answering, or a wrong chip ID" : "");
-        } else {
-          char a[16], af[16], b[16], sl[16], sh[16], of[16], dt[16], dp[16];
-          formatFixed(a, sizeof(a), bt, 2);
-          formatFixed(af, sizeof(af), bt * 9.0 / 5.0 + 32.0, 1);
-          formatFixed(b, sizeof(b), bp / 100.0, 2);
-          const float balt = bmpSlp.getPressure();
-          formatFixed(sl, sizeof(sl), baro::paToInHg(balt), 2);
-          formatFixed(sh, sizeof(sh), balt / 100.0, 2);
-          formatFixed(of, sizeof(of), bmpSlp.offset() / 100.0, 2);
-          formatFixed(dt, sizeof(dt), t - bt, 2);
-          formatFixed(dp, sizeof(dp), (p - bp) / 100.0, 2);
-          consolePrint("BMP390 T %s C (%s F)  P %s hPa = %s inHg / %s hPa at sea level (cal %s hPa)"
-                       " | BME280 - BMP390: T %s C, P %s hPa | %lu readings\r\n", a, af, b, sl, sh, of, dt, dp,
-                       (unsigned long) bmpN);
+          consolePrint("SHT31  T %s C (%s F)  H %s %%RH | BMP390 - SHT31: T %s C | %lu readings\r\n", a, af, b, dt,
+                       (unsigned long) shtN);
         }
       }
     }
@@ -947,44 +897,6 @@ void StartShtTask(void *argument)
     }
   }
   /* USER CODE END StartShtTask */
-}
-
-/* USER CODE BEGIN Header_StartBmpTask */
-/**
-  * @brief  Runs the BMP390's driver (forced, one reading a second) and
-  *         publishes each reading for sensorTask. Started by sensorTask
-  *         once the bus scan has found a BMP390 (or BMP388).
-  * @param  argument: Not used
-  * @retval None
-  */
-/* USER CODE END Header_StartBmpTask */
-void StartBmpTask(void *argument)
-{
-  /* USER CODE BEGIN StartBmpTask */
-  BMP390::bmp390_param_t param;
-  param.osr_pressure = BMP390::bmp390_osr_8x;
-  param.osr_temperature = BMP390::bmp390_osr_1x;
-  param.iir = BMP390::bmp390_iir_off;      // like the BME280 here: each reading on its own
-  param.period_ms = 1000;
-  static Bmp390Sensor bmp(param, &hi2c1, g_bmpAddr.load(), i2c1_mutexHandle);
-  bmp.setDebugTag("bmp390");
-
-  for(;;)
-  {
-    bmp.main(osKernelGetTickCount());       // sleeps inside, up to 100 ms
-    g_bmpState.store((int) bmp.state());
-    if (bmp.newData()) {
-      double t = NAN, p = NAN;
-      bmp.GetTemperature(&t);
-      bmp.GetPressure(&p);
-      g_bmpT.store((float) t);
-      g_bmpP.store((float) p);
-      g_bmpTick.store(osKernelGetTickCount());
-      g_bmpReadings.fetch_add(1);
-      DBG_EVENT("app", "bmp", (int32_t) lround(t * 100), (int32_t) lround(p));
-    }
-  }
-  /* USER CODE END StartBmpTask */
 }
 
 /* USER CODE BEGIN Header_StartConsoleTask */
