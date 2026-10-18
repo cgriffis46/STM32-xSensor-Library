@@ -2,43 +2,37 @@
 /**
   ******************************************************************************
   * @file           : main.cpp
-  * @brief          : DS1307 bring-up on the NUCLEO-L432KC
+  * @brief          : BME280 bring-up on the NUCLEO-L432KC
   *
-  *  The first live test of the GPS clock's parts: the DS1307 on its own.
-  *  The driver (xds1307<Stm32HalI2CTransport>, Claude-iTransport's
-  *  isensor/ds1307; see iTransport/SOURCE.txt) reads the DS1307 every
-  *  50 ms, and once a second a status line goes to the ST-LINK's virtual
-  *  COM port (USART2, 115200 8N1): the time, whether the oscillator runs,
-  *  and what the SQW/OUT pin is doing. Commands typed there set the time
-  *  and look at the battery-backed RAM.
+  *  A live test of one sensor: a BME280 (temperature, pressure, humidity)
+  *  on I2C1, read by Claude-iTransport's non-blocking driver
+  *  (xbme280<Stm32HalI2CTransport>, isensor/bme280; see
+  *  iTransport/SOURCE.txt) in forced mode, about five readings a second.
+  *  Once a second the latest reading goes to the ST-LINK's virtual COM
+  *  port (USART2, 115200 8N1), with a flag on any value outside the
+  *  BME280's range.
   *
-  *  The DS1307's SQW/OUT gives 1 Hz. Wired to A1 (PA1, TIM2_CH2) its edges
-  *  are latched by TIM2 at 1 MHz: the line shows its period (against the
-  *  Nucleo's LSE crystal, which trims the 80 MHz clock), and which edge
-  *  the DS1307's seconds tick on, worked out from when each read saw the
-  *  seconds change (Core/Inc/rtc_edge.h, the F405 example's; coarse, to the
-  *  50 ms between reads, and narrowing as more ticks are seen). A Saleae on
-  *  SQW and the I2C lines gives the precise answer
-  *  (Claude-iTransport's tools/saleae/saleae_log.py --rtc-edge).
+  *  At start-up the I2C bus is scanned and the chip ID read at 0x76 and
+  *  0x77 (the address depends on the board's SDO pin): 0x60 is a BME280,
+  *  0x58 a BMP280 (no humidity, and many boards sold as BME280 carry one),
+  *  0x61 a BME680. The scan repeats every 2 s until a BME280 answers.
   *
   *  A debug log (Claude-iTransport's DebugLog.h, at ITRANSPORT_DEBUG 2, set
   *  in the project's defines) goes out on USART1 TX, D5 (PB6), at 921600
-  *  8N1: the driver's state changes and I2C faults ("ds1307", "bus"), and
+  *  8N1: the driver's state changes and I2C faults ("bme280", "bus"), and
   *  this application's events ("app"). Read it with a 3.3 V USB-serial
-  *  adapter or the Saleae's async serial analyser; Claude-iTransport's
-  *  tools/saleae/saleae_log.py turns a capture into a timeline.
+  *  adapter or the Saleae's async serial analyser.
   *
-  *  The full GPS clock (GPS, OLED, W5500, NTP, PPS) that this project was
-  *  is in the repository's history, at commit eb4b352.
+  *  The GPS clock this project started as (GPS, OLED, W5500, NTP, PPS) is
+  *  in the repository's history at commit eb4b352.
   *
   *  Wiring (NUCLEO-L432KC):
-  *    I2C1_SCL  PA9  (D1)  -> DS1307 SCL
-  *    I2C1_SDA  PA10 (D0)  -> DS1307 SDA
-  *    TIM2_CH2  PA1  (A1)  <- DS1307 SQW/OUT (optional; 10k pull-up to 3.3 V)
-  *    5V, GND              -> DS1307 VCC (5 V), GND
+  *    I2C1_SCL  PA9  (D1)  -> BME280 SCL (SCK)
+  *    I2C1_SDA  PA10 (D0)  -> BME280 SDA (SDI)
+  *    3V3, GND             -> BME280 VCC/VIN, GND
   *    USART2    PA2/PA15   <> ST-LINK virtual COM port (the USB cable)
   *    USART1_TX PB6  (D5)  -> debug log, 921600 8N1 (USART1_RX PB7, D4, unused)
-  *    LD3       PB3        green LED: toggles on each DS1307 second
+  *    LD3       PB3        green LED: toggles on each reading
   ******************************************************************************
   * @attention
   *
@@ -62,37 +56,31 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <math.h>
 #include <atomic>
 #include "Stm32HalI2CTransport.h"
 #include "Stm32HalUartTransport.h"
 #include "Stm32DebugPort.h"
 #include "DebugLog.h"
-#include "xds1307.h"
-#include "rtc_edge.h"
+#include "xBME280.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef DS1307::xds1307<Stm32HalI2CTransport> Ds1307Clock;
-typedef DS1307::ds1307_time_t ClockTime;
+typedef BME280::xbme280<Stm32HalI2CTransport> Bme280Sensor;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-// The DS1307 is read this often: the seconds' tick is bracketed to about
-// twice this (two loop turns) against the SQW edges
-#define DS1307_READ_PERIOD_MS   50UL
-// DS1307 SQW/OUT: 1 Hz (control register 0x10)
-#define DS1307_SQW_MODE         DS1307::ds1307_sqw_t::Hz1
+// The BME280's ID register (0xD0) and what it holds for the parts that
+// look alike (Bosch's datasheets, as the driver and general knowledge have them)
+#define CHIP_ID_REG             0xD0
+#define CHIP_ID_BME280          0x60
+#define CHIP_ID_BMP280          0x58
+#define CHIP_ID_BME680          0x61
 
-// TIM2 counts at 1 MHz (80 MHz / 80) and latches both SQW edges on PA1
-#define SQW_TIMER_PRESCALER     79
-#define SQW_TIMEOUT_MS          2500UL     // no edge for this long: no SQW
-
-// Battery-backed RAM: a start counter at 0x08 ("DS", then 32 bits, little
-// endian), to show the RAM keeps what was written across a power cycle
-#define RAM_MAGIC0              'D'
-#define RAM_MAGIC1              'S'
+#define SCAN_RETRY_MS           2000UL     // no BME280 found: scan again this often
+#define READING_STALE_MS        3000UL     // no reading for this long: say so
 
 // The debug log's UART (USART1): fast, since level 2 logs every state change
 #define DEBUG_BAUD              921600
@@ -109,15 +97,13 @@ typedef DS1307::ds1307_time_t ClockTime;
 /* Private variables ---------------------------------------------------------*/
 I2C_HandleTypeDef hi2c1;
 
-TIM_HandleTypeDef htim2;
-
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
-/* Definitions for rtcTask */
-osThreadId_t rtcTaskHandle;
-const osThreadAttr_t rtcTask_attributes = {
-  .name = "rtcTask",
+/* Definitions for sensorTask */
+osThreadId_t sensorTaskHandle;
+const osThreadAttr_t sensorTask_attributes = {
+  .name = "sensorTask",
   .stack_size = 512 * 4,
   .priority = (osPriority_t) osPriorityNormal,
 };
@@ -139,12 +125,6 @@ const osMutexAttr_t console_mutex_attributes = {
   .name = "console_mutex"
 };
 /* USER CODE BEGIN PV */
-// SQW edges as TIM2 latched them, with their direction: the last eight,
-// written by the capture interrupt
-static volatile uint32_t g_sqwAt[8];
-static volatile uint8_t g_sqwRising[8];
-static std::atomic<uint32_t> g_sqwCount{0};
-
 // The console: a ring the tasks write (under console_mutex) and
 // consoleTask hands to USART2
 static char g_console[CONSOLE_RING];
@@ -152,7 +132,7 @@ static uint32_t g_conHead = 0, g_conTail = 0;
 static uint32_t g_conDropped = 0;
 
 // A command line typed on the console, handed from the UART interrupt to
-// rtcTask: g_cmdReady set once it is complete, cleared when taken
+// sensorTask: g_cmdReady set once it is complete, cleared when taken
 static char g_cmd[CONSOLE_LINE];
 static std::atomic<bool> g_cmdReady{false};
 /* USER CODE END PV */
@@ -161,10 +141,9 @@ static std::atomic<bool> g_cmdReady{false};
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_USART2_UART_Init(void);
-void StartRtcTask(void *argument);
+void StartSensorTask(void *argument);
 void StartConsoleTask(void *argument);
 
 /* USER CODE BEGIN PFP */
@@ -173,8 +152,6 @@ static void consolePrint(const char *fmt, ...) __attribute__((format(printf, 1, 
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static const char *const dayNames[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
-
 // The HAL UART and I2C interrupt callbacks are in iTransport/hw/stm32/src
 // (Stm32UartItCallbacks.cpp, Stm32I2CItCallbacks.cpp): don't define them here.
 
@@ -229,62 +206,77 @@ static ConsoleKeys consoleKeys;
 
 static void printHelp(void)
 {
-  consolePrint("\r\nNUCLEO-L432KC DS1307 bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), SQW=A1 (PA1)\r\n"
+  consolePrint("\r\nNUCLEO-L432KC BME280 bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), 100 kHz\r\n"
                "commands (Enter to finish; turn on your terminal's local echo):\r\n"
-               "  t YYYY-MM-DD HH:MM:SS   set the DS1307 (24 hour, kept as UTC); starts a stopped oscillator\r\n"
-               "  b                       set it to this firmware's build time (the build PC's local time)\r\n"
-               "  r                       read and show the 56 bytes of battery-backed RAM\r\n"
-               "  p                       start the SQW edge measurement again\r\n"
-               "  h                       this help\r\n\r\n");
+               "  s   scan the I2C bus and read the chip ID at 0x76 and 0x77\r\n"
+               "  h   this help\r\n\r\n");
 }
 
-// "2026-10-18 12:34:56", or false
-static bool parseTime(const char *s, ClockTime *t)
+// "-12.34" from a double with `decimals` places, without printf float
+// support (newlib nano); "nan" for NAN
+static void formatFixed(char *out, size_t len, double v, int decimals)
 {
-  unsigned y, mo, d, h, mi, se;
-  char tail;
-  if (sscanf(s, "%u-%u-%u %u:%u:%u%c", &y, &mo, &d, &h, &mi, &se, &tail) != 6)
-    return false;
-  t->year = (uint16_t) y; t->month = (uint8_t) mo; t->day = (uint8_t) d;
-  t->hour = (uint8_t) h; t->minute = (uint8_t) mi; t->second = (uint8_t) se;
-  t->weekday = 0;
-  return DS1307::ds1307_valid(*t);
-}
-
-// __DATE__ ("Oct 18 2026") and __TIME__ ("12:34:56")
-static bool buildTime(ClockTime *t)
-{
-  static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
-  char mon[4] = { __DATE__[0], __DATE__[1], __DATE__[2], 0 };
-  const char *m = strstr(months, mon);
-  if (m == nullptr)
-    return false;
-  t->month = (uint8_t)((m - months) / 3 + 1);
-  t->day = (uint8_t) atoi(__DATE__ + 4);
-  t->year = (uint16_t) atoi(__DATE__ + 7);
-  t->hour = (uint8_t) atoi(__TIME__);
-  t->minute = (uint8_t) atoi(__TIME__ + 3);
-  t->second = (uint8_t) atoi(__TIME__ + 6);
-  t->weekday = 0;
-  return DS1307::ds1307_valid(*t);
-}
-
-// "-0.100", from microseconds, as ms with three decimals
-static void formatMs(char *out, size_t len, int32_t us)
-{
-  const long a = labs((long) us);
-  snprintf(out, len, "%c%ld.%03ld", us < 0 ? '-' : '+', a / 1000, a % 1000);
-}
-
-static const char *stateName(DS1307::ds1307_state_t s)
-{
-  switch (s) {
-  case DS1307::ds1307_init_state:
-  case DS1307::ds1307_control_state:
-  case DS1307::ds1307_wait_control_state: return "starting";
-  case DS1307::ds1307_err_state:          return "NOT ANSWERING";
-  default:                                return "ok";
+  if (isnan(v)) {
+    snprintf(out, len, "nan");
+    return;
   }
+  long scale = 1;
+  for (int i = 0; i < decimals; ++i)
+    scale *= 10;
+  const bool neg = v < 0;
+  const long long n = (long long)((neg ? -v : v) * scale + 0.5);
+  snprintf(out, len, "%s%ld.%0*ld", neg ? "-" : "", (long)(n / scale), decimals, (long)(n % scale));
+}
+
+static const char *chipName(uint8_t id)
+{
+  switch (id) {
+  case CHIP_ID_BME280: return "BME280";
+  case CHIP_ID_BMP280: return "BMP280 (no humidity)";
+  case CHIP_ID_BME680: return "BME680";
+  default:             return "unknown";
+  }
+}
+
+// Every address 0x08..0x77 that acknowledges, and the chip ID at 0x76 and
+// 0x77. Blocking HAL calls under i2c1_mutex, about 15 ms. The mutex is
+// not recursive and a driver holds it from issuing a transfer until it
+// sees it land, so call this only from a thread with no transfer
+// outstanding (sensorTask waits for a state of its driver's with none). Returns the
+// address of a BME280, or 0 (and 0 if the bus stayed busy).
+static uint8_t scanBus(void)
+{
+  uint8_t found = 0;
+  char list[160];
+  size_t n = 0;
+  list[0] = 0;
+  if (osMutexAcquire(i2c1_mutexHandle, 200) != osOK) {
+    consolePrint("I2C bus busy: no scan\r\n");
+    return 0;
+  }
+  for (uint8_t a = 0x08; a <= 0x77; ++a) {
+    if (HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK && n + 6 < sizeof(list))
+      n += (size_t) snprintf(list + n, sizeof(list) - n, " 0x%02X", a);
+  }
+  uint8_t ids[2] = {0, 0};
+  bool idOk[2] = {false, false};
+  for (int i = 0; i < 2; ++i) {
+    const uint8_t a = (uint8_t)(BME280::bme280_i2c_addr_1 + i);
+    idOk[i] = HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(a << 1), CHIP_ID_REG, I2C_MEMADD_SIZE_8BIT, &ids[i], 1, 10) == HAL_OK;
+  }
+  osMutexRelease(i2c1_mutexHandle);
+
+  consolePrint("I2C scan:%s\r\n", n ? list : " nothing answered (check SDA D0, SCL D1, 3V3, GND, pull-ups)");
+  for (int i = 0; i < 2; ++i) {
+    const uint8_t a = (uint8_t)(BME280::bme280_i2c_addr_1 + i);
+    if (idOk[i]) {
+      consolePrint("  0x%02X: chip ID 0x%02X = %s\r\n", a, ids[i], chipName(ids[i]));
+      DBG_EVENT("app", "chip-id", (int32_t) a, (int32_t) ids[i]);
+      if (ids[i] == CHIP_ID_BME280 && found == 0)
+        found = a;
+    }
+  }
+  return found;
 }
 /* USER CODE END 0 */
 
@@ -320,14 +312,12 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
-  MX_TIM2_Init();
   /* USER CODE BEGIN 2 */
   // The debug log on USART1: lines queue in a ring from here on, and
   // consoleTask's dbg::poll() sends them
   static Stm32HalUartTransport debugUart(&huart1);
   dbg::begin(&debugUart, Stm32DebugPort::port());
   DBG_EVENT("app", "start", (int32_t) HAL_GetREVID(), (int32_t) HAL_GetDEVID());
-  HAL_TIM_IC_Start_IT(&htim2, TIM_CHANNEL_2);   // SQW, both edges; TIM2 free-running at 1 MHz
   /* USER CODE END 2 */
 
   /* Init scheduler */
@@ -356,8 +346,8 @@ int main(void)
   /* USER CODE END RTOS_QUEUES */
 
   /* Create the thread(s) */
-  /* creation of rtcTask */
-  rtcTaskHandle = osThreadNew(StartRtcTask, NULL, &rtcTask_attributes);
+  /* creation of sensorTask */
+  sensorTaskHandle = osThreadNew(StartSensorTask, NULL, &sensorTask_attributes);
 
   /* creation of consoleTask */
   consoleTaskHandle = osThreadNew(StartConsoleTask, NULL, &consoleTask_attributes);
@@ -463,7 +453,7 @@ static void MX_I2C1_Init(void)
 
   /* USER CODE END I2C1_Init 1 */
   hi2c1.Instance = I2C1;
-  hi2c1.Init.Timing = 0x10909CEC;   // 100 kHz (standard mode: the DS1307's limit) at 80 MHz
+  hi2c1.Init.Timing = 0x10909CEC;   // 100 kHz (standard mode) at 80 MHz; the BME280 also takes 400 kHz
   hi2c1.Init.OwnAddress1 = 0;
   hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
   hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
@@ -492,55 +482,6 @@ static void MX_I2C1_Init(void)
   /* USER CODE BEGIN I2C1_Init 2 */
 
   /* USER CODE END I2C1_Init 2 */
-
-}
-
-/**
-  * @brief TIM2 Initialization Function: a free-running 32-bit 1 MHz counter,
-  *        channel 2 capturing both edges of the DS1307's SQW on PA1
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-  TIM_IC_InitTypeDef sConfigIC = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = SQW_TIMER_PRESCALER;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_IC_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
-  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
-  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
-  sConfigIC.ICFilter = 4;   // a few samples: ignores glitches shorter than ~0.1 us
-  if (HAL_TIM_IC_ConfigChannel(&htim2, &sConfigIC, TIM_CHANNEL_2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -647,102 +588,70 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-// An SQW edge, latched by TIM2 channel 2 in hardware (exact whatever the
-// interrupt's latency); its direction read from the pin, which stays put
-// for half a second
-extern "C" void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
-{
-  if (htim->Instance == TIM2 && htim->Channel == HAL_TIM_ACTIVE_CHANNEL_2) {
-    const uint32_t at = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_2);
-    const bool high = HAL_GPIO_ReadPin(DS1307_SQW_GPIO_Port, DS1307_SQW_Pin) == GPIO_PIN_SET;
-    const uint32_t n = g_sqwCount.load(std::memory_order_relaxed);
-    g_sqwAt[n & 7] = at;
-    g_sqwRising[n & 7] = high ? 1 : 0;
-    g_sqwCount.store(n + 1, std::memory_order_release);
-  }
-}
+
 /* USER CODE END 4 */
 
-/* USER CODE BEGIN Header_StartRtcTask */
+/* USER CODE BEGIN Header_StartSensorTask */
 /**
-  * @brief  Runs the DS1307's driver, takes the console's commands, follows
-  *         the SQW edges, and prints a status line on each new second.
+  * @brief  Finds the BME280 (bus scan, chip ID), then runs its driver,
+  *         takes the console's commands and prints the latest reading
+  *         once a second.
   * @param  argument: Not used
   * @retval None
   */
-/* USER CODE END Header_StartRtcTask */
-void StartRtcTask(void *argument)
+/* USER CODE END Header_StartSensorTask */
+void StartSensorTask(void *argument)
 {
   /* USER CODE BEGIN 5 */
-  // Built here: the transport needs i2c1_mutex, which main() creates
-  DS1307::ds1307_param_t param;
-  param.period_ms = DS1307_READ_PERIOD_MS;
-  param.sqw = DS1307_SQW_MODE;
-  static Ds1307Clock rtc(param, &hi2c1, DS1307_ADDR, i2c1_mutexHandle);
-  rtc.setDebugTag("ds1307");               // its state changes and faults in the debug log
-
   printHelp();
 
-  rtcedge::Analyzer an;
-  uint32_t usedSqw = 0;
-  uint32_t lastSqwTick = 0;
-  bool sqwEver = false;
-  // the SQW's period: falling edge to falling edge, and averaged since the first
-  uint32_t lastFall = 0, firstFall = 0, falls = 0;
-  int32_t lastPeriodUs = 0;
-  uint32_t lastRise = 0;
-  int32_t highUs = 0;                      // rising to the next falling edge
+  // Find it first: 0x76 or 0x77, by its chip ID
+  uint8_t addr = 0;
+  while ((addr = scanBus()) == 0) {
+    consolePrint("no BME280 (chip ID 0x60) at 0x76 or 0x77; scanning again in %lu s\r\n",
+                 (unsigned long)(SCAN_RETRY_MS / 1000));
+    osDelay(SCAN_RETRY_MS);
+  }
+  consolePrint("BME280 at 0x%02X: forced mode, pressure x4, temperature x1, humidity x1, no filter\r\n", addr);
 
-  ClockTime t = {};
-  bool haveTime = false;
-  int lastSecond = -1;
-  uint32_t lastStatusTick = 0;
-  bool lastRunning = true;
-  DS1307::ds1307_set_status_t lastSet = DS1307::ds1307_set_status_t::None;
+  // Forced mode: a measurement whenever the driver asks for one (about
+  // every 0.2 s: its 100 ms pause, then up to 100 ms of conversion)
+  BME280::bme280_param_t param;
+  param._osrs_p_t = BME280::bme280_osrs_p_4x;
+  param._osrs_t_t = BME280::bme280_osrs_t_1x;
+  param._osrs_h_t = BME280::bme280_osrs_h_1x;
+  param._mode_t = BME280::bme280_forced_mode;
+  param._sb_t = BME280::bme280_sb_1000;      // normal mode only; not used here
+  param._filter_t = BME280::bme280_filter_off;
+  // Built here: the transport needs i2c1_mutex and the address just found
+  static Bme280Sensor sensor(param, &hi2c1, addr, i2c1_mutexHandle);
+  sensor.setDebugTag("bme280");             // its state changes and faults in the debug log
 
-  // The start counter in RAM: read it once the DS1307 answers, then write it back plus one
-  enum class Ram : uint8_t { Idle, Reading, Writing, Done, Dumping } ram = Ram::Idle;
-  bool ramCounted = false;
-  uint8_t ramBytes[DS1307::ds1307_ram_size];
-  static uint8_t ramOut[6];
-
-  uint32_t mainBefore = TIM2->CNT;         // TIM2 at the start of the last main() call
+  double t = NAN, p = NAN, h = NAN;
+  uint32_t readings = 0;
+  uint32_t lastReadingTick = 0;
+  uint32_t lastPrintTick = osKernelGetTickCount();
+  double tMin = NAN, tMax = NAN;
+  bool scanPending = false;
 
   for(;;)
   {
-    // A read lands in the main() call after the one that issued it, so its
-    // START lies between the start of the call before and the end of this one
-    const uint32_t from = mainBefore;
-    mainBefore = TIM2->CNT;
-    rtc.main(osKernelGetTickCount());      // sleeps inside, up to the read period
-    const uint32_t to = TIM2->CNT;
+    sensor.main(osKernelGetTickCount());    // sleeps inside, up to 100 ms
     const uint32_t tick = osKernelGetTickCount();
 
-    // SQW edges since last time, in order, before the read that may follow them
-    const uint32_t n = g_sqwCount.load(std::memory_order_acquire);
-    if (n - usedSqw > 8)
-      usedSqw = n - 8;                     // fell behind: the ring holds the last eight
-    for (; usedSqw != n; ++usedSqw) {
-      const uint32_t at = g_sqwAt[usedSqw & 7];
-      const bool rising = g_sqwRising[usedSqw & 7] != 0;
-      an.edge(at, rising);
-      sqwEver = true;
-      lastSqwTick = tick;
-      if (rising) {
-        lastRise = at;
-      } else {
-        if (falls != 0)
-          lastPeriodUs = (int32_t)(at - lastFall);
-        if (falls == 0)
-          firstFall = at;
-        if (lastRise != 0 && at - lastRise < 1000000u)
-          highUs = (int32_t)(at - lastRise);
-        lastFall = at;
-        ++falls;
-        DBG_EVENT("app", "sqw-fall", (int32_t) at, lastPeriodUs);
+    if (sensor.newData()) {
+      sensor.GetTemperature(&t);
+      sensor.GetPressure(&p);
+      sensor.GetHumidity(&h);
+      ++readings;
+      lastReadingTick = tick;
+      if (!isnan(t)) {
+        if (isnan(tMin) || t < tMin) tMin = t;
+        if (isnan(tMax) || t > tMax) tMax = t;
       }
+      HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
+      DBG_EVENT("app", "reading", (int32_t) lround(t * 100), (int32_t) lround(p), (int32_t) lround(h * 100));
     }
-    const bool sqwNow = sqwEver && (tick - lastSqwTick) < SQW_TIMEOUT_MS;
 
     // A command typed on the console
     if (g_cmdReady.load(std::memory_order_acquire)) {
@@ -751,151 +660,50 @@ void StartRtcTask(void *argument)
       g_cmdReady.store(false, std::memory_order_release);
       consolePrint("> %s\r\n", cmd);
       DBG_EVENT("app", "cmd", (int32_t) cmd[0]);
-      ClockTime set;
-      if (cmd[0] == 't' && cmd[1] == ' ') {
-        if (parseTime(cmd + 2, &set) && rtc.setTime(set))
-          consolePrint("setting the DS1307 to %04u-%02u-%02u %02u:%02u:%02u\r\n", set.year, set.month, set.day,
-                       set.hour, set.minute, set.second);
-        else
-          consolePrint("not a date and time: t YYYY-MM-DD HH:MM:SS (2000..2099, 24 hour)\r\n");
-      } else if (cmd[0] == 'b' && cmd[1] == 0) {
-        if (buildTime(&set) && rtc.setTime(set))
-          consolePrint("setting the DS1307 to the build time, %04u-%02u-%02u %02u:%02u:%02u\r\n", set.year,
-                       set.month, set.day, set.hour, set.minute, set.second);
-        else
-          consolePrint("the build time (%s %s) didn't parse\r\n", __DATE__, __TIME__);
-      } else if (cmd[0] == 'r' && cmd[1] == 0) {
-        if (ram == Ram::Idle || ram == Ram::Done) {
-          rtc.readRam();
-          ram = Ram::Dumping;
-        } else {
-          consolePrint("the RAM is busy; try again\r\n");
-        }
-      } else if (cmd[0] == 'p' && cmd[1] == 0) {
-        an.restart();
-        consolePrint("SQW edge measurement started again\r\n");
-      } else if ((cmd[0] == 'h' || cmd[0] == '?') && cmd[1] == 0) {
+      if (cmd[0] == 's' && cmd[1] == 0)
+        scanPending = true;                 // done below, between the driver's transfers
+      else if ((cmd[0] == 'h' || cmd[0] == '?') && cmd[1] == 0)
         printHelp();
-      } else {
-        consolePrint("unknown command; h for help\r\n");
-      }
-    }
-
-    // What became of a time set
-    if (rtc.setStatus() != lastSet) {
-      lastSet = rtc.setStatus();
-      if (lastSet == DS1307::ds1307_set_status_t::Done)
-        consolePrint("DS1307 set\r\n");
-      else if (lastSet == DS1307::ds1307_set_status_t::Failed)
-        consolePrint("DS1307 set FAILED (the I2C write didn't go through)\r\n");
-      DBG_EVENT("app", "set", (int32_t) lastSet);
-    }
-
-    // A read landed: the time, and the seconds' tick against the SQW edges
-    if (rtc.newData() && rtc.getTime(&t)) {
-      haveTime = true;
-      uint32_t tf = 0, tt = 0;
-      if (an.read(from, to, t.second, &tf, &tt))   // brackets the tick when the seconds moved on
-        DBG_EVENT("app", "tick", (int32_t) t.second, (int32_t) tf, (int32_t) tt);
-      if (ram == Ram::Idle && !ramCounted) {
-        rtc.readRam();
-        ram = Ram::Reading;
-      }
-    }
-
-    // The RAM: the start counter, or a dump
-    if ((ram == Ram::Reading || ram == Ram::Dumping) && rtc.ramReadStatus() == DS1307::ds1307_set_status_t::Done
-        && rtc.getRam(ramBytes)) {
-      if (ram == Ram::Dumping) {
-        for (uint8_t row = 0; row < DS1307::ds1307_ram_size; row += 8) {
-          consolePrint("RAM 0x%02X: %02X %02X %02X %02X %02X %02X %02X %02X\r\n", 0x08 + row, ramBytes[row],
-                       ramBytes[row + 1], ramBytes[row + 2], ramBytes[row + 3], ramBytes[row + 4],
-                       ramBytes[row + 5], ramBytes[row + 6], ramBytes[row + 7]);
-        }
-        ram = Ram::Done;
-      } else {
-        uint32_t count = 0;
-        const bool known = ramBytes[0] == RAM_MAGIC0 && ramBytes[1] == RAM_MAGIC1;
-        if (known)
-          count = (uint32_t) ramBytes[2] | ((uint32_t) ramBytes[3] << 8) | ((uint32_t) ramBytes[4] << 16)
-                  | ((uint32_t) ramBytes[5] << 24);
-        ++count;
-        ramOut[0] = RAM_MAGIC0;
-        ramOut[1] = RAM_MAGIC1;
-        ramOut[2] = (uint8_t) count;
-        ramOut[3] = (uint8_t)(count >> 8);
-        ramOut[4] = (uint8_t)(count >> 16);
-        ramOut[5] = (uint8_t)(count >> 24);
-        if (rtc.writeRam(0, ramOut, sizeof(ramOut))) {
-          ram = Ram::Writing;
-          DBG_EVENT("app", "ram-count", (int32_t) count, known ? 1 : 0);
-          consolePrint(known ? "RAM: start %lu (the count was kept: the RAM holds across resets and power cycles)\r\n"
-                             : "RAM: no start count yet (new chip, or the battery was out): starting at %lu\r\n",
-                       (unsigned long) count);
-        } else {
-          ram = Ram::Done;
-        }
-      }
-    } else if ((ram == Ram::Reading || ram == Ram::Dumping)
-               && rtc.ramReadStatus() == DS1307::ds1307_set_status_t::Failed) {
-      consolePrint("RAM read FAILED\r\n");
-      ram = Ram::Done;
-      ramCounted = true;
-    }
-    if (ram == Ram::Writing && rtc.ramWriteStatus() != DS1307::ds1307_set_status_t::Pending) {
-      if (rtc.ramWriteStatus() == DS1307::ds1307_set_status_t::Failed)
-        consolePrint("RAM write FAILED\r\n");
-      ram = Ram::Done;
-      ramCounted = true;
-    }
-
-    // The status line: on each new second, or once a second without a time
-    const bool newSecond = haveTime && (int) t.second != lastSecond;
-    if (newSecond || (!haveTime && tick - lastStatusTick >= 1000)) {
-      lastSecond = haveTime ? t.second : -1;
-      lastStatusTick = tick;
-      HAL_GPIO_TogglePin(LD3_GPIO_Port, LD3_Pin);
-      char sqw[80], edge[96], a[16], b[16];
-      if (!sqwNow) {
-        snprintf(sqw, sizeof(sqw), "SQW none on A1");
-      } else if (falls < 2) {
-        snprintf(sqw, sizeof(sqw), "SQW seen");
-      } else {
-        // ppm against TIM2 (the LSE): averaged over every period since the first
-        const int64_t span = (int64_t)(uint32_t)(lastFall - firstFall);
-        const int64_t ppb = (span - (int64_t)(falls - 1) * 1000000) * 1000 / (int64_t)(falls - 1);
-        const long ap = labs((long) ppb);
-        snprintf(sqw, sizeof(sqw), "SQW %ldus high=%ldus avg %c%ld.%03ldppm/%lus", (long) lastPeriodUs,
-                 (long) highUs, ppb < 0 ? '-' : '+', ap / 1000, ap % 1000, (unsigned long)(falls - 1));
-      }
-      const rtcedge::Polarity v = an.verdict();
-      if (!sqwNow || an.ticks() == 0) {
-        edge[0] = 0;
-      } else if (v == rtcedge::Polarity::Unknown) {
-        snprintf(edge, sizeof(edge), " | tick: undecided (%u)", an.ticks());
-      } else {
-        const rtcedge::Window &w = v == rtcedge::Polarity::Falling ? an.falling() : an.rising();
-        formatMs(a, sizeof(a), w.loUs);
-        formatMs(b, sizeof(b), w.hiUs);
-        snprintf(edge, sizeof(edge), " | tick %s..%sms after %s edge (%u)", a, b,
-                 v == rtcedge::Polarity::Falling ? "falling" : "rising", w.n);
-      }
-      if (haveTime)
-        consolePrint("%s %04u-%02u-%02u %02u:%02u:%02u | DS1307 %s%s | %s%s\r\n", dayNames[t.weekday % 7], t.year,
-                     t.month, t.day, t.hour, t.minute, t.second, stateName(rtc.state()),
-                     rtc.running() ? "" : ", STOPPED (CH set): set it with t or b", sqw, edge);
       else
-        consolePrint("DS1307 %s, no time yet (I2C address 0x68: SDA D0, SCL D1, pull-ups, 5 V) | %s\r\n",
-                     stateName(rtc.state()), sqw);
-      if (haveTime && rtc.running() != lastRunning) {
-        lastRunning = rtc.running();
-        if (!lastRunning)
-          consolePrint("the DS1307's oscillator is stopped (a new chip, or the battery ran out): it keeps no time"
-                       " until it is set\r\n");
+        consolePrint("unknown command; h for help\r\n");
+    }
+
+    // The scan: only in a state where the driver has no transfer
+    // outstanding (it holds i2c1_mutex from issuing one until it sees it
+    // land, and the mutex isn't recursive). It spends most of its time in these.
+    if (scanPending) {
+      const BME280::bme280_state_t st = sensor.state();
+      if (st == BME280::bme280_sleeping || st == BME280::bme280_measuring || st == BME280::bme280_error
+          || st == BME280::bme280_reset_settle || st == BME280::bme280_im_update_pause) {
+        scanPending = false;
+        (void) scanBus();
       }
     }
-    if (rtc.state() == DS1307::ds1307_err_state)
-      haveTime = false;
+
+    // Once a second: the latest reading, flagged where it is outside the
+    // BME280's range (-40..85 C, 300..1100 hPa; humidity pinned at 0 or
+    // 100 % is the compensation's clamp, so suspect too)
+    if (tick - lastPrintTick >= 1000) {
+      lastPrintTick = tick;
+      const bool stale = readings == 0 || tick - lastReadingTick > READING_STALE_MS;
+      if (stale) {
+        consolePrint("BME280 at 0x%02X: no reading%s (driver state %d%s)\r\n", addr,
+                     readings == 0 ? " yet" : " for 3 s", (int) sensor.state(),
+                     sensor.state() == BME280::bme280_error ? ", error: not answering, or a wrong chip ID" : "");
+      } else {
+        char ts[16], ps[16], hs[16], lo[16], hi[16];
+        formatFixed(ts, sizeof(ts), t, 2);
+        formatFixed(ps, sizeof(ps), p / 100.0, 2);
+        formatFixed(hs, sizeof(hs), h, 1);
+        formatFixed(lo, sizeof(lo), tMin, 2);
+        formatFixed(hi, sizeof(hi), tMax, 2);
+        const bool tBad = !(t >= -40.0 && t <= 85.0);
+        const bool pBad = !(p >= 30000.0 && p <= 110000.0);
+        const bool hBad = !(h > 0.0 && h < 100.0);
+        consolePrint("T %s C%s  P %s hPa%s  H %s %%RH%s | %lu readings, T %s..%s C\r\n", ts, tBad ? " (?)" : "", ps,
+                     pBad ? " (?)" : "", hs, hBad ? " (?)" : "", (unsigned long) readings, lo, hi);
+      }
+    }
   }
   /* USER CODE END 5 */
 }
