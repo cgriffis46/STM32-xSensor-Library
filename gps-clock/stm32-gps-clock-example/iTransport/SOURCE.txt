@@ -17,8 +17,9 @@ Copied unchanged; only the files this example needs:
   isensor/sht31                  <- isensor/sht31 (inc: SHT31.h, xSHT31.h; src)
   isensor/bmp390                 <- isensor/bmp390 (inc: bmp390.h, xbmp390.h; src)
 
-From commit 427d9d2 (main, with pull request #42 merged), which makes the
-SHT31 fetch at the chip's rate:
+From commit 35cfc4f (main, with pull requests #42 and #43 merged): the
+SHT31 fetching at the chip's rate, and a break before its soft reset at
+start up:
   isensor/sht31                  <- isensor/sht31 (inc, src)
 
 OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it.
