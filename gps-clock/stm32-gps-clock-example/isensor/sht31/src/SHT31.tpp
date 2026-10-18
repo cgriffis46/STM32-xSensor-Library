@@ -48,11 +48,28 @@ template <typename TTransport>
 void SHT31<TTransport>::main(uint32_t nowMs){
 	switch(_state){
 	case sht31_init_state:
-		if(this->checkDevice()){ // if device exists, go to reset.
-			enter(sht31_reset_state,nowMs);
+		if(this->checkDevice()){ // if device exists, stop periodic mode, then reset.
+			enter(sht31_init_break_state,nowMs);
 		}
 		else { // if device doesn't exist go to error state.
 			fail(nowMs);
+		}
+		break;
+	// A chip left in periodic mode (the MCU reset, the chip kept its
+	// power) refuses the soft reset; a break stops periodic mode first.
+	case sht31_init_break_state:
+		issued(writeCommand(SHT31_BREAK),sht31_wait_init_break_state,nowMs);
+		break;
+	case sht31_wait_init_break_state:
+		if(finished(nowMs)){ // refused or not: an idle chip may not take a break
+			enter(sht31_init_break_settle_state,nowMs);
+		}
+		break;
+	case sht31_init_break_settle_state:
+		if(elapsed(nowMs,sht31_break_ms)){
+			enter(sht31_reset_state,nowMs);
+		} else {
+			sleepRemaining(nowMs,sht31_break_ms);
 		}
 		break;
 	case sht31_reset_state:

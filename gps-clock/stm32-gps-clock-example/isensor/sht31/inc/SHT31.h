@@ -35,6 +35,13 @@
   *  periodic mode it is stopped first, as the datasheet asks, and
   *  started again afterwards.
   *
+  *  At start up a break goes out before the soft reset. The chip keeps
+  *  its power, and so its periodic mode, while the MCU resets or is
+  *  reflashed, and in periodic mode it refuses everything but break and
+  *  fetch: on the L432KC board it refused the soft reset's second byte
+  *  every time. The break's own answer is ignored: an idle chip may
+  *  refuse it.
+  *
   *  In periodic mode the result is fetched at the rate the chip measures
   *  (fetchPeriodMs(): 2000 ms at 0.5 mps down to 100 ms at 10), timed from
   *  the start of the last good fetch, so each measurement is read once.
@@ -155,6 +162,9 @@ typedef enum sht31_state_t{
 	sht31_wait_fetch_cmd_state,
 	sht31_fetch_read_state,				// issue the 6 byte read
 	sht31_wait_fetch_state,
+	sht31_init_break_state,				// at start up: a break, in case the chip is still in periodic mode
+	sht31_wait_init_break_state,
+	sht31_init_break_settle_state,		// pause before the soft reset
 	sht31_error_state					// pause, then start again from sht31_init_state
 }sht31_state_t;
 

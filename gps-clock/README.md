@@ -98,7 +98,7 @@ The BME280 driver's files are still vendored here, but unused.
      The debug log says why. The state numbers are:
      * `bmp390_state_t` in `isensor/bmp390/inc/bmp390.h`, where 28 is the
        error state;
-     * `sht31_state_t` in `SHT31.h`, where 37 is the error state.
+     * `sht31_state_t` in `SHT31.h`, where 40 is the error state.
 5. LD3 (green) toggles on each BMP390 reading.
 
 ### Sea-level pressure
@@ -152,7 +152,11 @@ project's C and C++ defines). The lines are:
   I2C faults.
 * `app reading <T x100> <P Pa>`: each BMP390 reading, as integers. For
   example, `app reading 2561 103048` is 25.61 C, 1030.48 hPa.
-* `sht31 st <from> <to>`: the SHT31 driver's states.
+* `sht31 st <from> <to>`: the SHT31 driver's states. Each start begins with
+  a break (state 38), then the soft reset: the chip keeps its power, and its
+  periodic mode, while the board is reset or reflashed, and in periodic mode
+  it refuses the reset. On 2026-10-18 the driver without the break failed in
+  state 2 every 100 ms (`sht31 bus-err 2`, `sht31 fail 2`).
 * `app sht <T x100> <H x100>`: each SHT31 reading.
 * `app slp <Pa>`: the sea-level reading, once a second.
 * `app cal <offset Pa> <elevation m>`: a `b` calibration.
