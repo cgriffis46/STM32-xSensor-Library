@@ -30,7 +30,7 @@ its history, tagged `legacy-2026-10`.
 | 0x40 | HTU21D(F), or anything else there | not an Si70xx | `HTU21DF` | 1 s |
 | 0x44 / 0x45 | SHT31 | answers | `SHT31` (periodic) | 1 s |
 | 0x5C / 0x5D | LPS35HW | WHO_AM_I 0xB1 in 0x0F | `lps35hw` | 1 s |
-| 0x60 | MPL3115A2 | WHO_AM_I 0xC4 in 0x0C | `mpl3115a2` (barometer mode) | 5 s |
+| 0x60 | MPL3115A2 | WHO_AM_I 0xC4 in 0x0C | `mpl3115a2` (both modes: pressure, then altitude) | 5 s |
 | 0x68 | DS1307 | answers | `ds1307` | 1 s |
 | 0x76 / 0x77 | BME280 | 0x60 in 0xD0 | `bme280` (forced) | ~0.25 s |
 | 0x76 / 0x77 | BMP280 | 0x58 in 0xD0 | `bmp280` (forced) | 1 s |
@@ -160,6 +160,21 @@ console show.
    drift apart. `o` clears the offsets. Neither `e` nor `b` is kept across a
    reset.
 
+### The MPL3115A2's altitude
+
+The MPL3115A2 makes two measurements each period: the pressure (barometer
+mode), then its own altitude (altimeter mode), reckoned from the pressure and
+the sea-level reference it is given (its BAR_IN register). Give it the current
+altimeter setting with `a`, e.g. weather.gov's `a 30.36`, and its altitude is
+an estimate of the station's elevation, independent of `e`:
+
+    mpl3115a2 T 24.00 C (75.2 F)  P 1023.32 hPa  alt 39.4 m (129 ft) at 30.36 inHg = ...
+
+Until then it uses the chip's own reference, 29.92 inHg: pressure altitude, as
+an aircraft's altimeter shows it with 29.92 set. `a` isn't kept across a reset;
+the driver writes it to the chip again whenever the chip is reset. `b`'s
+offset doesn't change the altitude (the chip only sees its own pressure).
+
 ### Commands
 
 | Command | |
@@ -168,6 +183,7 @@ console show.
 | `e 131` / `e 40m` | the station's elevation, in feet or metres |
 | `b 30.54` | calibrate each barometer's sea-level reading to this many inHg now |
 | `o` | clear the calibration offsets |
+| `a 30.36` | the MPL3115A2's altimeter setting (its sea-level reference), for its altitude |
 | `t 2026-10-19 14:05:00` | set the DS1307's time (24 hour); this also starts a stopped oscillator |
 | `h` | the help |
 

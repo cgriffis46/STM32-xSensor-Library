@@ -22,6 +22,14 @@
  *  calls sleep(), an empty stub here. Override sleep() for an OS (see
  *  xmpl3115a2.h) to give up the CPU for that long.
  *
+ *  Each period (from the start of one measurement to the start of the
+ *  next) the chip makes a one-shot measurement: pressure (barometer
+ *  mode), altitude (altimeter mode), or both, one after the other (both
+ *  mode), with the temperature each time. The altitude is the chip's own,
+ *  from the pressure and BAR_IN, the sea-level pressure it is given
+ *  (setSeaLevelPressure()); until then the chip's reset value, 101326 Pa
+ *  (29.92 inHg): pressure altitude.
+ *
  *  The state bookkeeping, sleep() and the issue/wait helpers are
  *  inherited from SensorStateMachine (isensor/inc), shared with the
  *  other drivers.
@@ -120,13 +128,21 @@ typedef enum mpl3115a2_state_t{
 	mpl3115a2_wait_status_state,
 	mpl3115a2_conversion_state,					// issue the 5 byte data read
 	mpl3115a2_wait_conversion_state,
+	mpl3115a2_write_alt_state,					// the ctrl_reg1 write with ALT changed, OST clear: landed
+	mpl3115a2_bar_in_state,						// issue the BAR_IN write, after setSeaLevelPressure() or a reset
+	mpl3115a2_wait_bar_in_state,
 	mpl3115a2_error_state						// pause, then start again from mpl3115a2_init_state
 }mpl3115a2_state_t;
 
 typedef enum mpl3115a2_mode_t{
 	mpl3115a2_altimeter_mode=0b1,
-	mpl3115a2_barometer_mode=0b0
+	mpl3115a2_barometer_mode=0b0,
+	mpl3115a2_both_mode=0b10		// a barometer measurement, then an altimeter one, each period
 }mpl3115a2_mode_t;
+
+// BAR_IN after a reset: 0xC5E7 x 2 Pa (the datasheet's default, from
+// general knowledge; not checked against NXP's document here).
+const uint32_t mpl3115a2_bar_in_default_pa = 101326;
 
 /** MPL3115A2 oversample values **/
 enum {
@@ -173,7 +189,7 @@ const uint32_t mpl3115a2_bus_timeout_ms = 100;		// one transfer, to issue or to 
 const uint32_t mpl3115a2_startup_ms = 100;			// in mpl3115a2_init_state before the first access
 const uint32_t mpl3115a2_reset_poll_ms = 10;		// after reset, and between RST polls
 const uint32_t mpl3115a2_phase_timeout_ms = 1000;	// start up, or one whole measurement
-const uint32_t mpl3115a2_period_ms = 5000;			// between measurements
+const uint32_t mpl3115a2_period_ms = 5000;			// from the start of one measurement to the next
 const uint32_t mpl3115a2_conversion_poll_ms = 100;	// before each look at the status register
 const uint32_t mpl3115a2_error_backoff_ms = 100;	// in mpl3115a2_error_state before starting again
 
@@ -211,8 +227,16 @@ public:
 	void main(uint32_t nowMs);
 	bool newData();
 	float getTemp();		// degrees C. NAN until the first reading
-	float getPressure();	// hPa, in barometer mode. NAN in altimeter mode
-	float getAltitude();	// m, in altimeter mode. NAN in barometer mode
+	float getPressure();	// hPa, in barometer and both modes. NAN in altimeter mode
+	float getAltitude();	// m, in altimeter and both modes. NAN in barometer mode
+
+	// The sea-level pressure the chip's altitude is reckoned from (BAR_IN,
+	// 2 Pa steps): an altimeter setting, e.g. weather.gov's. Written before
+	// the next measurement, and again after every reset. False, and
+	// nothing changed, outside 2..131070 Pa. Call it from the thread that
+	// calls main(), like SetIRQ().
+	bool setSeaLevelPressure(float pa);
+	float seaLevelPressure() const { return _bar_in ? 2.0f * _bar_in : (float)mpl3115a2_bar_in_default_pa; }
 
 	// Sets the interrupt enables (ctrl_reg4) and which pin each goes
 	// to (ctrl_reg5). Written to the chip during start up, or before
@@ -223,7 +247,12 @@ private:
 
 	mpl3115a2_param_t _param;
 	uint32_t phase_start;	// when start up, or the current measurement, began
+	uint32_t _lastStart;	// when the last period's first measurement began
 	bool _new_data,_EnableIRQ,_irq_changed;
+	bool _measAlt;			// the measurement under way is an altimeter one
+	uint16_t _bar_in;		// BAR_IN to write, 2 Pa units; 0 leaves the chip's own
+	bool _bar_in_changed;
+	uint8_t _barInReg[2];	// BAR_IN as written, MSB first: a member, the transport sends it later
 
 	float _temperature;
 	float _pressure;
