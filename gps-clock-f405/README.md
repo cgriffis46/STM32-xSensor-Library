@@ -1,7 +1,8 @@
 # Feather STM32F405 GPS Clock
 
 STM32CubeIDE / FreeRTOS GPS clock and NTP server on an Adafruit Feather stack,
-the next step after `gps-clock/` (the NUCLEO-L432KC proof of concept). Same
+the next step after the NUCLEO-L432KC proof of concept (in this repository's
+history at `eb4b352`, in `gps-clock/`; that project is now `l432kc-sensor-bringup/`). Same
 clock: the STM32's own RTC, set from GPS time and disciplined to the GPS's PPS,
 served by an NTP server on a W5500. New here: the DS3231's SQW latched on the
 same timebase as the PPS, a probe that finds which SQW edge the DS3231's seconds

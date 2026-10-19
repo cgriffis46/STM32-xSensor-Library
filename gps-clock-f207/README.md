@@ -2,8 +2,9 @@
 
 STM32CubeIDE / FreeRTOS GPS clock and NTP server on a NUCLEO-F207ZG, with ST's
 X-NUCLEO-GNSS2A1 (Teseo-VIC3DA) on its Arduino connector and the board's own
-Ethernet. It follows `gps-clock/` (NUCLEO-L432KC) and `gps-clock-f405/` (Feather
-STM32F405). What's new here:
+Ethernet. It follows the NUCLEO-L432KC GPS clock (in this repository's history at
+`eb4b352`, in `gps-clock/`; that project is now `l432kc-sensor-bringup/`) and
+`gps-clock-f405/` (Feather STM32F405). What's new here:
 
 * **The clock is the Ethernet MAC's IEEE 1588 system time, not the RTC.** The
   F2's RTC has no sub-second register, no shift and no smooth calibration

@@ -1,0 +1,247 @@
+# STM32L432KC Sensor Bring-up
+
+One STM32CubeIDE / FreeRTOS project for the NUCLEO-L432KC that tests any of
+[Claude-iTransport](https://github.com/cgriffis46/Claude-iTransport)'s sensor
+drivers on real hardware. Plug sensors onto I2C1 and reset:
+
+* the board scans the bus and recognises each chip by its address and, where
+  it has one, its ID register;
+* it starts that chip's non-blocking driver in a thread of its own;
+* it prints each reading on the ST-LINK's USB serial port as it arrives.
+
+There is no project to switch and no code to change for each sensor.
+
+The drivers are vendored in `l432kc-sensor-bringup/iTransport` and
+`l432kc-sensor-bringup/isensor` by `sync_from_claude_itransport.sh`, which
+records the commit in `iTransport/SOURCE.txt`. They replace the old blocking
+drivers and single-sensor examples this repository used to hold; those are in
+its history, tagged `legacy-2026-10`.
+
+## Sensors
+
+| Address | Chip | How it is recognised | Driver | Every |
+|---------|------|----------------------|--------|-------|
+| 0x19 | LSM303DLHC accelerometer | answers (no ID register) | `lsm303dlhc_accel` | 1 s |
+| 0x1E | LSM303DLHC magnetometer | "H43" in 0x0A..0x0C | `lsm303dlhc_mag` | 1 s |
+| 0x21 | HMC6352 compass | answers | `hmc6352` | 1 s |
+| 0x30 | MMC5603 / MMC5633 | product ID 0x10 in 0x39 | `mmc56x3` | 1 s |
+| 0x38 | AHT20 | answers | `AHT20` | 1 s |
+| 0x40 | Si7021 / Si7020 / Si7013 | electronic ID SNB_3 0x15 / 0x14 / 0x0D | `Si7021` | 2 s |
+| 0x40 | HTU21D(F), or anything else there | not an Si70xx | `HTU21DF` | 1 s |
+| 0x44 / 0x45 | SHT31 | answers | `SHT31` (periodic) | 1 s |
+| 0x5C / 0x5D | LPS35HW | WHO_AM_I 0xB1 in 0x0F | `lps35hw` | 1 s |
+| 0x60 | MPL3115A2 | WHO_AM_I 0xC4 in 0x0C | `mpl3115a2` (barometer mode) | 5 s |
+| 0x68 | DS1307 | answers | `ds1307` | 1 s |
+| 0x76 / 0x77 | BME280 | 0x60 in 0xD0 | `bme280` (forced) | ~0.25 s |
+| 0x76 / 0x77 | BMP280 | 0x58 in 0xD0 | `bmp280` (forced) | 1 s |
+| 0x76 / 0x77 | BME680 / BME688 | 0x61 in 0xD0 | `bme680` (gas heater 320 C, 150 ms) | 3 s |
+| 0x76 / 0x77 | BMP390 / BMP388 | 0x60 / 0x50 in 0x00 | `bmp390` | 1 s |
+| USART1 | PMS5003 (Plantower) | build option, see below | `PM25` | ~1 s |
+| USART1 | DS18B20 (one, on 1-Wire) | build option, see below | `ds18b20` | 1 s |
+
+Notes on recognising the chips:
+
+* **"Answers"** means the chip has no ID to check. Any chip at that address
+  is taken to be it: a DS3231 or an MPU-6050 at 0x68 would be driven as a
+  DS1307.
+* **Only the first of each kind is driven.** A second BME280 at the other
+  address is reported, not started.
+* **The Bosch chips** (BME280, BMP280, BME680, BMP390) share 0x76 and 0x77:
+  at most two of them on one bus, one at each address. Two chips at one
+  address answer together, and a read gives the AND of their replies; the scan
+  says "two chips at this address?" when an ID makes no sense.
+* **The Si70xx ID** values, and the HTU21D(F) using the same commands, are
+  from general knowledge of the Si7021 and HTU21D datasheets, not checked
+  here.
+
+## Wiring (NUCLEO-L432KC)
+
+| Signal | Nucleo pin | MCU pin | |
+|--------|------------|---------|---|
+| I2C SCL | **D1** | PA9, I2C1_SCL | every sensor's SCL (SCK) |
+| I2C SDA | **D0** | PA10, I2C1_SDA | every sensor's SDA (SDI) |
+| Power | **3V3**, **GND** | | every sensor's VIN, GND |
+| Debug log | **D5** | PB6, USART1_TX | to a 3.3 V USB-serial adapter's RX, or a Saleae; 921600 8N1 |
+| (USART1 RX) | D4 | PB7 | unused by default |
+| Console | USB | PA2/PA15, USART2 | the ST-LINK's virtual COM port, 115200 8N1 |
+
+* **I2C pull-ups.** Breakout boards carry pull-ups on SDA and SCL. A bare chip
+  needs 4.7k from each to 3V3.
+* **The Nucleo pins.** D0/D1 = PA10/PA9 and D4/D5 = PB7/PB6 are from memory of
+  ST's UM1956, not checked here.
+
+### USART1: the debug log, a PMS5003, or a DS18B20
+
+The L432KC has no other UART free (USART2 is the console), so USART1 does one
+of three things. Set `BRINGUP_USART1` in the project's C++ defines:
+
+| `BRINGUP_USART1` | USART1 is | Wiring |
+|------------------|-----------|--------|
+| 0 (default) | the debug log, TX only, 921600 | D5 to the adapter's RX |
+| 1 | a Plantower PMS5003 at 9600 | the PMS5003's TX to **D4**, 5 V and GND to its power pins |
+| 2 | a 1-Wire bus with one DS18B20 | **D5 and D4 linked**, to the DS18B20's DQ, with 4.7k from DQ to 3V3 |
+
+With 1 or 2 there is no debug log. For the DS18B20, D5 is set to open drain at
+start-up. The UART hears what it sends through the D4 link, as Claude-iTransport's
+`Stm32HalOneWireTransport` needs.
+
+## Using it
+
+1. Flash it (STM32CubeIDE, or STM32CubeProgrammer with the `.elf`).
+2. Open the ST-LINK's virtual COM port at 115200 8N1, with local echo on.
+3. At start-up the board scans the bus. With a BME680 and an SHT31 it looks
+   like this:
+
+       I2C scan: 0x44 0x77
+         0x44: SHT31
+         0x77: BME680
+       sht31     at 0x44: started
+       bme680    at 0x77: started
+       2 sensors running
+
+   The scan repeats every 2 s until something is recognised. Sensors are
+   started only by that first good scan, so connect them before reset; `s`
+   scans again later, but only reports.
+4. Each reading is printed as it comes, with a count at the end:
+
+       sht31     T 24.97 C (76.9 F)  H 35.8 %RH | 12
+       bme680    T 25.79 C (78.4 F)  H 32.5 %RH  P 1031.42 hPa  gas 209.9 kOhm = 30.59 inHg / 1035.99 hPa at sea level (40 m, cal 0.00 hPa) | 4
+
+   These numbers are only an example.
+
+   * **Barometers:** every barometer's line ends with its sea-level reading.
+   * **No readings:** a sensor that stops reading for two periods and 2 s
+     more is reported once, with its driver's state number. Look the number
+     up in the driver's header, as `<driver>_state_t`, where the last value
+     is the error state.
+   * **LD3 (green)** toggles on each reading, from any sensor.
+
+### Sea-level pressure
+
+Each barometer measures the *station* pressure, the air pressure where it sits.
+A `SeaLevelBarometer` (Claude-iTransport's `isensor/inc/SeaLevelBarometer.h`)
+for each one gives the **altimeter setting**: NOAA's formula from the station
+pressure and the elevation. That is what weather.gov's "Barometer" and a Davis
+console show.
+
+1. **Set your elevation.** `STATION_ELEVATION_M` in `app.cpp` is **40 m**
+   (131 ft, this board's station). Change it there, or for the session with
+   `e 131` (feet) or `e 40m` (metres). It applies to every barometer.
+2. **Calibrate if you like.** When the elevation is right, type the current
+   reference reading, e.g. `b 30.53`. Each barometer gets its own offset, added
+   to its station pressure, so after a `b` the barometers show how far they
+   drift apart. `o` clears the offsets. Neither `e` nor `b` is kept across a
+   reset.
+
+### Commands
+
+| Command | |
+|---------|---|
+| `s` | scan the I2C bus again (reports only) |
+| `e 131` / `e 40m` | the station's elevation, in feet or metres |
+| `b 30.54` | calibrate each barometer's sea-level reading to this many inHg now |
+| `o` | clear the calibration offsets |
+| `t 2026-10-19 14:05:00` | set the DS1307's time (24 hour); this also starts a stopped oscillator |
+| `h` | the help |
+
+### The debug log (D5)
+
+Open the USB-serial adapter at **921600 8N1**, or put the Saleae's async serial
+analyser on D5. Sample at 25 MS/s or more: at 10 MS/s the odd character comes
+out wrong. Each line is `<seq> <ms> <tag> <what> [<value>...]`
+(Claude-iTransport's `DebugLog.h`, at `ITRANSPORT_DEBUG` 2, set in the project's
+C and C++ defines). The lines are:
+
+* `app start <rev> <dev>`: the chip's revision and device IDs.
+* `app chip-id <address> <id 0x00> <id 0xD0>`: what the scan read at 0x76 and
+  0x77.
+* `app sensor <address> <count>`: a sensor's thread started.
+* `<sensor> st <from> <to>`: that driver's state changes. `<sensor> fail`,
+  `bus xfer-fail` and `bus-err` are I2C faults.
+* `<sensor> reading <values...>`: each reading, the values as integers at the
+  decimals printed (x100 for 2 places, x10 for 1). The sea-level pressure in
+  Pa comes last, for a barometer. For example,
+  `bme680 reading 2579 325 103140 2110 103598` is 25.79 C, 32.5 %RH,
+  1031.40 hPa, 211.0 kOhm, and 1035.98 hPa at sea level.
+* `<sensor> cal <offset Pa> <elevation m>`: a `b` calibration.
+* `app silent <index> <state>`: a sensor that stopped reading.
+* `app cmd <char>`: a console command.
+
+A gap in `seq` means lines were dropped (the 1 KB ring was full).
+
+## Regenerating code in CubeMX
+
+`Core/Src/main.c` is CubeMX's own file. The application is in
+`Core/Src/app.cpp`, and `main.c` only calls it from three USER CODE blocks
+(declared in `Core/Inc/app.h`):
+
+| main.c | USER CODE block | call |
+|--------|-----------------|------|
+| `main()`, after the `MX_..._Init()` calls | `2` | `app_init();` |
+| `StartSensorTask()` | `5` | `app_sensor_task(argument);` |
+| `StartConsoleTask()` | `StartConsoleTask` | `app_console_task(argument);` |
+
+CubeMX keeps USER CODE blocks when it regenerates `main.c`, so the calls survive
+regeneration, and `main.c` never needs renaming to `.cpp`. If a regeneration
+ever loses the calls, put the three lines back in those blocks.
+
+## Updating the drivers
+
+    sh sync_from_claude_itransport.sh /path/to/Claude-iTransport
+
+That copies the drivers (the list is at the top of the script) and rewrites
+`iTransport/SOURCE.txt`. Fix bugs in Claude-iTransport, then sync again; don't
+edit the copies here.
+
+## Inside
+
+* **sensorTask** (`app_sensor_task()`):
+  * scans until something is recognised, then starts a thread for each
+    sensor found;
+  * then it only takes the console's commands, and reports sensors that have
+    gone quiet.
+  * The scan's blocking HAL calls hold the bus mutex. The sensor threads
+    simply wait for it.
+* **A thread per sensor**, made with `osThreadNew()` at run time, so they
+  aren't in the `.ioc`:
+  * each runs its driver's `x*` variant (`main()`, which sleeps between
+    steps), formats each new reading and prints it;
+  * barometers also get their sea-level reading, and act on `e`, `b` and
+    `o`;
+  * 2 KB of stack each.
+  * The drivers can't share one thread: each holds the bus mutex from issuing
+    a transfer until it lands, and the mutex isn't recursive.
+  * The driver objects are built only for the sensors found: function-local
+    statics, never freed.
+* **consoleTask** (`app_console_task()`): hands the console ring to USART2, and
+  calls `dbg::poll()`, which sends the debug log to USART1.
+* **The FreeRTOS heap** is 32 KB, enough for about a dozen sensor threads.
+* **The system clock** is 80 MHz (MSI + PLL, trimmed by the LSE crystal X2).
+  From cold, the LSE takes about 145 ms to start.
+* **I2C1** runs at 100 kHz.
+
+## Not verified
+
+* **On the board:**
+  * This multi-sensor firmware hasn't run on the board yet.
+  * Earlier single-purpose versions of this project ran on the NUCLEO-L432KC
+    on 2026-10-18 and 19, checked with Saleae captures: the BME280; the BMP390
+    and SHT31 together; the BME680 for nearly two hours. The same drivers,
+    with the same settings, are used here.
+  * The other drivers (AHT20, BMP280, HMC6352, HTU21DF, Si7021, LPS35HW,
+    MPL3115A2, DS1307, MMC56x3, LSM303DLHC, PM25, DS18B20) have run only in
+    Claude-iTransport's host tests, against simulated chips.
+* **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
+  warnings, in all three USART1 settings: about 108 KB flash at -Os (180 KB at
+  -O0) of 256 KB, and 47 KB RAM of 64 KB, 32 KB of it the FreeRTOS heap.
+* **Stacks:** estimated from `-fstack-usage`, about 1.3 KB of each sensor
+  thread's 2 KB, and less for sensorTask. Newlib's printf frames are a guess,
+  not measured.
+* **Identification:** how each chip is recognised (the table above) is from
+  the drivers and general knowledge. Only the BME280, BMP390, BME680 and
+  SHT31 identifications have been seen working on the board.
+* **The PMS5003 and DS18B20 options** were built, never wired up.
+* **The `.ioc`** was edited by hand to match: I2C1, USART1 (921600, PB6/PB7),
+  USART2 with its interrupt, LD3, sensorTask, consoleTask and their mutexes,
+  and the 32 KB heap. Open it in CubeMX and check it before generating code
+  over the project.
