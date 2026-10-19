@@ -1,5 +1,5 @@
 Vendored from https://github.com/cgriffis46/Claude-iTransport
-commit cadb408 (claude/mpl3115a2-altimeter, 2026-10-19; MIT, see iTransport/LICENSE), by
+commit 7817668 (main, 2026-10-19; MIT, see iTransport/LICENSE), by
 ../sync_from_claude_itransport.sh. Copied unchanged:
 
   iTransport/inc, src            <- iTransport/itransport/inc, src
