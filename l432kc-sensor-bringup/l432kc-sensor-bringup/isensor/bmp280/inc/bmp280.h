@@ -23,6 +23,10 @@
  *  calls sleep(), an empty stub here. Override sleep() for an OS (see
  *  xbmp280.h) to give up the CPU for that long.
  *
+ *  Measures once every bmp280_period_ms, start to start (the conversion
+ *  and the transfers don't add to it). The first measurement comes a
+ *  period after start up.
+ *
  *  The state bookkeeping, sleep() and the issue/wait helpers are
  *  inherited from SensorStateMachine (isensor/inc), shared with the
  *  other drivers.
@@ -244,6 +248,7 @@ protected:
 	signed short dig_P2, dig_P3, dig_P4, dig_P5, dig_P6, dig_P7, dig_P8, dig_P9;
 
 	uint32_t phase_start;	// when start up, or the current measurement, began
+	uint32_t _lastStart;	// when the last measurement started: the period runs from here
 
 	bool _newData;
 

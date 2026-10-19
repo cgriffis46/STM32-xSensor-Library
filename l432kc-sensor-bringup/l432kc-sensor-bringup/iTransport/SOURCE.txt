@@ -1,5 +1,5 @@
 Vendored from https://github.com/cgriffis46/Claude-iTransport
-commit 4fa11a8 (claude/start-to-start, 2026-10-19; MIT, see iTransport/LICENSE), by
+commit bb65495 (claude/start-to-start, 2026-10-19; MIT, see iTransport/LICENSE), by
 ../sync_from_claude_itransport.sh. Copied unchanged:
 
   iTransport/inc, src            <- iTransport/itransport/inc, src
