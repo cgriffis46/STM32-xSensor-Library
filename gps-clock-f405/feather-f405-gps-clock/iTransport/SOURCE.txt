@@ -36,7 +36,7 @@ OneWireUartTransport is only here because Stm32UartItCallbacks.cpp calls it,
 and SPITransport because Stm32SpiItCallbacks.cpp includes it.
 
 This copy is the same as gps-clock/stm32-gps-clock-example's (the L432
-example). isensor/ds1307 is here only for its date helpers (ds1307_to_unix
+example, as it was at eb4b352). isensor/ds1307 is here only for its date helpers (ds1307_to_unix
 and the rest); this board has a DS3231, read by Core/Inc/rtc_probe.h.
 
 From ST (BSD-3; each folder has its LICENSE.md), only the files used:

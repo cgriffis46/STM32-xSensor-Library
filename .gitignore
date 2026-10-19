@@ -1,0 +1,11 @@
+# CubeIDE build output
+Debug/
+Release/
+*.o
+*.d
+*.su
+*.elf
+*.map
+*.list
+# CubeIDE workspace state
+.metadata/
