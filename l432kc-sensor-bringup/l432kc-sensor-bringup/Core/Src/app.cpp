@@ -987,8 +987,80 @@ static void startFound(const Hit &h, bool *started)
   }
 }
 
+// ---- I2C bus clear ----
+//
+// A reset of the STM32 (after flashing, or the button) doesn't reset the
+// sensors. One that was sending a 0 when it came keeps SDA low, waiting for
+// a clock that never comes, and the scan then finds nothing. busClear()
+// clocks SCL by hand until that sensor lets go, then sends a STOP. Up to 9
+// clocks (the standard bus clear, from general knowledge of the I2C
+// specification, not checked against it here). Nothing is touched if SDA is
+// already high.
+
+static const int BUS_CLEAR_MAX_CLOCKS = 9;
+static int g_busClear = 0;                 // clocks sent; -1 SDA still low after them; -2 SCL held low
+
+// At least 5 us (a 100 kHz bus or slower): each pass of the loop takes at
+// least 4 cycles.
+static void busClearHalfBit(void)
+{
+  const uint32_t n = SystemCoreClock / 1000000u * 5u / 4u;
+  for (volatile uint32_t i = 0; i < n; ++i) {}
+}
+
+static int busClear(void)
+{
+  const uint32_t SCL = GPIO_PIN_9, SDA = GPIO_PIN_10;   // PA9, PA10 (I2C1 in the .ioc)
+  if (HAL_GPIO_ReadPin(GPIOA, SDA) == GPIO_PIN_SET)
+    return 0;                              // the bus is free: leave I2C1 alone
+
+  // Take the pins from I2C1: open drain outputs, released (high), so they
+  // can still be read.
+  HAL_I2C_DeInit(&hi2c1);
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  HAL_GPIO_WritePin(GPIOA, SCL | SDA, GPIO_PIN_SET);
+  GPIO_InitTypeDef g;
+  memset(&g, 0, sizeof(g));
+  g.Pin = SCL | SDA;
+  g.Mode = GPIO_MODE_OUTPUT_OD;
+  g.Pull = GPIO_NOPULL;
+  g.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &g);
+  busClearHalfBit();
+
+  int result;
+  if (HAL_GPIO_ReadPin(GPIOA, SCL) == GPIO_PIN_RESET) {
+    result = -2;                           // something holds the clock: clocking can't help
+  } else {
+    int clocks = 0;
+    while (clocks < BUS_CLEAR_MAX_CLOCKS && HAL_GPIO_ReadPin(GPIOA, SDA) == GPIO_PIN_RESET) {
+      HAL_GPIO_WritePin(GPIOA, SCL, GPIO_PIN_RESET);
+      busClearHalfBit();
+      HAL_GPIO_WritePin(GPIOA, SCL, GPIO_PIN_SET);
+      busClearHalfBit();
+      ++clocks;
+    }
+    result = HAL_GPIO_ReadPin(GPIOA, SDA) == GPIO_PIN_SET ? clocks : -1;
+    if (result > 0) {
+      // A START, then a STOP, with SCL still high: every sensor drops what
+      // it was doing. SCL isn't taken low first, or a sensor still sending
+      // could put its next bit on SDA.
+      HAL_GPIO_WritePin(GPIOA, SDA, GPIO_PIN_RESET);
+      busClearHalfBit();
+      HAL_GPIO_WritePin(GPIOA, SDA, GPIO_PIN_SET);
+      busClearHalfBit();
+    }
+  }
+
+  // Back to I2C1: HAL_I2C_Init() calls the MSP init, which sets the pins
+  // to the I2C function again.
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    Error_Handler();
+  return result;
+}
+
 // From main(), after the peripherals are set up and before the scheduler
-// starts: USART1 for what BRINGUP_USART1 says. For the debug log, lines
+// starts: the I2C bus clear, then USART1 for what BRINGUP_USART1 says. For the debug log, lines
 // queue in a ring from here on, and consoleTask's dbg::poll() sends them.
 void app_init(void)
 {
@@ -1014,6 +1086,9 @@ void app_init(void)
   g.Alternate = GPIO_AF7_USART1;
   HAL_GPIO_Init(DBG_TX_GPIO_Port, &g);
 #endif
+  g_busClear = busClear();
+  if (g_busClear != 0)
+    DBG_FAULT("app", "bus-clear", (int32_t) g_busClear);
 }
 
 // Commands typed on the console
@@ -1090,6 +1165,12 @@ void app_sensor_task(void *argument)
 {
   (void) argument;
   printHelp();
+  if (g_busClear > 0)
+    consolePrint("I2C1: SDA was held low at start; %d clock(s) freed it\r\n", g_busClear);
+  else if (g_busClear == -1)
+    consolePrint("I2C1: SDA still held low after %d clocks: check the wiring and power\r\n", BUS_CLEAR_MAX_CLOCKS);
+  else if (g_busClear == -2)
+    consolePrint("I2C1: SCL held low at start: check the wiring and power\r\n");
   bool started[F_LSM303_M + 1];
   memset(started, 0, sizeof(started));
 
