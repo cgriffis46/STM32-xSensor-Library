@@ -103,7 +103,7 @@ void AHT20<TTransport>::main(uint32_t nowMs){
 		if((_start_measure==true)||(nowMs-_lastStart)>=aht20_period_ms){
 			_start_measure=false;
 			phase_start=nowMs;
-			_lastStart=nowMs;
+			this->nextPeriod(_lastStart,nowMs,aht20_period_ms);
 			enter(aht_start_measurement,nowMs);
 		} else {
 			// No longer than aht20_request_poll_ms at a time, so a
