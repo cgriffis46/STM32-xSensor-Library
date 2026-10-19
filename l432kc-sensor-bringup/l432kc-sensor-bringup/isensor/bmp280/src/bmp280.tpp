@@ -29,6 +29,7 @@ bmp280<TTransport>::bmp280(const bmp280_param_t &param, TArgs&&... transportArgs
 	_temp=NAN;
 	_pressure=NAN;
 	phase_start=0;
+	_lastStart=0;
 }
 
 template <typename TTransport>
@@ -113,15 +114,19 @@ void bmp280<TTransport>::main(uint32_t nowMs){
 			break;
 		case bmp280_wait_ctrl_meas:
 			if(landed(nowMs)){
+				_lastStart=nowMs; // the first measurement a period from now
 				enter(bmp280_sleeping,nowMs);
 			}
 			break;
 		case bmp280_sleeping:
-			if(elapsed(nowMs,bmp280_period_ms)){
+			// The period runs from the start of the last measurement, so the
+			// conversion and the transfers don't add to it.
+			if((nowMs-_lastStart)>=bmp280_period_ms){
 				phase_start=nowMs;
+				_lastStart=nowMs;
 				enter(bmp280_start_measurement,nowMs);
 			} else {
-				sleepRemaining(nowMs,bmp280_period_ms);
+				sleepRemaining(_lastStart,nowMs,bmp280_period_ms);
 			}
 			break;
 		case bmp280_start_measurement:

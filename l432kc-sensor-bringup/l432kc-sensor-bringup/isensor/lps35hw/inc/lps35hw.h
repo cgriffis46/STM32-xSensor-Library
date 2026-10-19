@@ -29,8 +29,10 @@
  *  inherited from SensorStateMachine (isensor/inc), shared with the
  *  other drivers.
  *
- *  Measures once every lps35hw_period_ms, and sooner when
- *  startMeasurement() asks. The chip's FIFO is not used.
+ *  Measures once every lps35hw_period_ms, start to start (the conversion
+ *  and the transfers don't add to it), and sooner when
+ *  startMeasurement() asks. The first measurement comes a period after
+ *  start up. The chip's FIFO is not used.
  */
 
 #ifndef LPS35HW_H_
@@ -199,6 +201,7 @@ public:
 protected:
 	lps35hw_param_t _param;
 	uint32_t phase_start;	// when start up, or the current measurement, began
+	uint32_t _lastStart;	// when the last measurement started: the period runs from here
 	bool _force_measurement;
 	float _temp,_pressure;
 	bool _newData;

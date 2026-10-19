@@ -100,8 +100,9 @@ start-up. The UART hears what it sends through the D4 link, as Claude-iTransport
        2 sensors running
 
    The scan repeats every 2 s until something is recognised. Sensors are
-   started only by that first good scan, so connect them before reset; `s`
-   scans again later, but only reports.
+   started only by that first good scan, and I2C isn't hot-pluggable: connect
+   sensors with the board unplugged, then power up. `s` scans again later,
+   but only reports.
 4. Each reading is printed as it comes, with a count at the end:
 
        sht31     T 24.97 C (76.9 F)  H 35.8 %RH | 12
@@ -223,14 +224,21 @@ edit the copies here.
 ## Not verified
 
 * **On the board:**
-  * This multi-sensor firmware hasn't run on the board yet.
-  * Earlier single-purpose versions of this project ran on the NUCLEO-L432KC
-    on 2026-10-18 and 19, checked with Saleae captures: the BME280; the BMP390
-    and SHT31 together; the BME680 for nearly two hours. The same drivers,
-    with the same settings, are used here.
-  * The other drivers (AHT20, BMP280, HMC6352, HTU21DF, Si7021, LPS35HW,
-    MPL3115A2, DS1307, MMC56x3, LSM303DLHC, PM25, DS18B20) have run only in
-    Claude-iTransport's host tests, against simulated chips.
+  * This firmware ran on the NUCLEO-L432KC on 2026-10-19, checked with Saleae
+    captures, with these sensors:
+    * the BME680;
+    * the AHT20, HTU21D and BME680 together;
+    * the Si7021, LPS35HW and BMP280 together.
+
+    Every one was recognised by the scan and started, and read on schedule
+    with no faults. The intervals were 1001 ms, 2001 ms for the Si7021 and
+    3001 ms for the BME680; the extra 1 ms is the thread loop's
+    `osDelay(1)`.
+  * Earlier versions of this project ran the BME280, the BMP390 and the SHT31
+    on the same board (2026-10-18), with the same drivers and settings.
+  * Not yet run on a chip: HMC6352, MPL3115A2, DS1307, MMC56x3, LSM303DLHC,
+    the BMP388, and the PM25 and DS18B20 options. Those drivers have run only
+    in Claude-iTransport's host tests, against simulated chips.
 * **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
   warnings, in all three USART1 settings: about 108 KB flash at -Os (180 KB at
   -O0) of 256 KB, and 47 KB RAM of 64 KB, 32 KB of it the FreeRTOS heap.

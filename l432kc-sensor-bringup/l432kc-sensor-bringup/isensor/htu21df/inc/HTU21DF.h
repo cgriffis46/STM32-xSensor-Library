@@ -30,8 +30,9 @@
  *  other drivers.
  *
  *  Measures temperature then humidity once every htu21df_period_ms,
- *  and at once when startTempMeasurement() or
- *  startHumidityMeasurement() asks.
+ *  start to start (the conversions and transfers don't add to it), and
+ *  at once when startTempMeasurement() or startHumidityMeasurement()
+ *  asks. The first measurement comes a period after start up.
  */
 
 #ifndef HTU21DF_HTU21DF_H_
@@ -127,6 +128,7 @@ private:
   float _humidity, _temp;
   bool _start_measure;
   bool _newData;
+  uint32_t _lastStart;	// when the last measurement started: the period runs from here
 
   // The transport fills this in after main() has returned, so it
   // has to be a member and not a local.

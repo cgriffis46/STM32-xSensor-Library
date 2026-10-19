@@ -27,6 +27,11 @@
  *  calls sleep(), an empty stub here. Override sleep() for an OS (see
  *  xSi7021.h) to give up the CPU for that long.
  *
+ *  Measures humidity, then temperature, once every Si7021_period_ms,
+ *  start to start (the conversions and the transfers don't add to it),
+ *  and at once when asked. The first measurement comes a period after
+ *  start up; a heater change (setHeater()) starts the period over.
+ *
  *  The state bookkeeping, sleep() and the issue/wait helpers are
  *  inherited from SensorStateMachine (isensor/inc), shared with the
  *  other drivers.
@@ -164,6 +169,7 @@ private:
 	float temp,humidity; // temperature and humidity
 	bool _updateTemp,_updateHumidity; // flags to force a measurement
 	bool _updateHeater; // flag to write the heater settings again
+	uint32_t _lastStart; // when the last measurement started: the period runs from here
 
 	// The transport fills this in after main() has returned, so it
 	// has to be a member and not a local.

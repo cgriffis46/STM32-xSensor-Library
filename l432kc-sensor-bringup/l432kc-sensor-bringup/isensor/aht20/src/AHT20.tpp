@@ -17,6 +17,7 @@ AHT20<TTransport>::AHT20(TArgs&&... transportArgs)
 	: base(aht20_init, aht_error, aht20_bus_timeout_ms, std::forward<TArgs>(transportArgs)...) {
 	status_word=0;
 	phase_start=0;
+	_lastStart=0;
 	_start_measure = false;
 	_newData=false;
 	_temp=NAN;
@@ -79,6 +80,7 @@ void AHT20<TTransport>::main(uint32_t nowMs){
 				enter(aht_reinit,nowMs);
 			}
 			else {
+				_lastStart=nowMs; // the first measurement a period from now
 				enter(aht_sleep,nowMs);
 			}
 		}
@@ -96,15 +98,18 @@ void AHT20<TTransport>::main(uint32_t nowMs){
 		}
 		break;
 	case aht_sleep:
-		if((_start_measure==true)||elapsed(nowMs,aht20_period_ms)){
+		// The period runs from the start of the last measurement, so the
+		// conversion and the transfers don't add to it.
+		if((_start_measure==true)||(nowMs-_lastStart)>=aht20_period_ms){
 			_start_measure=false;
 			phase_start=nowMs;
+			_lastStart=nowMs;
 			enter(aht_start_measurement,nowMs);
 		} else {
 			// No longer than aht20_request_poll_ms at a time, so a
 			// StartMeasurement() request is seen without waiting out
 			// the whole period.
-			uint32_t left=aht20_period_ms-(nowMs-last_update);
+			uint32_t left=aht20_period_ms-(nowMs-_lastStart);
 			sleep(left<aht20_request_poll_ms?left:aht20_request_poll_ms);
 		}
 		break;
