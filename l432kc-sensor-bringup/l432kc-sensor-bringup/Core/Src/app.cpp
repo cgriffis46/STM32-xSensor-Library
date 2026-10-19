@@ -10,7 +10,9 @@
   *  of its own (an x* driver sleeps inside main(), and each driver holds
   *  the bus mutex from issuing a transfer until it lands, so two cannot
   *  share a thread). Each reading is printed as it arrives, on the
-  *  ST-LINK's virtual COM port (USART2, 115200 8N1).
+  *  ST-LINK's virtual COM port (USART2, 115200 8N1), which is a GUI for
+  *  PuTTY (iDisplay's xTerminal and xGui): the home screen at the top (the
+  *  MPL3115A2's cell, the command line) and the console's last lines below.
   *
   *  I2C1, what is looked for (address: chip, how it is recognised):
   *    0x19      LSM303DLHC accelerometer (answers; it has no ID register)
@@ -77,6 +79,11 @@
 #include "Stm32DebugPort.h"
 #include "DebugLog.h"
 #include "SeaLevelBarometer.h"
+#include "xGui.h"
+#include "xTerminal.h"
+#include "xTerminalKeys.h"
+#include "xLogLines.h"
+#include "xCell.h"
 #include "xAHT20.h"
 #include "xBME280.h"
 #include "xbme680.h"
@@ -124,8 +131,15 @@ typedef Stm32HalI2CTransport I2C;
 #define MAX_SENSORS             16
 #define SENSOR_STACK_WORDS      512        // each sensor thread: driver, formatting, consolePrint
 
-#define CONSOLE_RING            2048
 #define CONSOLE_LINE            48
+// The PuTTY window: the GUI (40 x 7 inside a frame) and below it the
+// console's last lines, 79 wide, so the whole fits PuTTY's default 80 x 24
+// with its last row free
+#define CONSOLE_COLS            40
+#define CONSOLE_ROWS            7
+#define CONSOLE_LOG_ROWS        14
+#define CONSOLE_LOG_COLS        79
+#define GUI_STACK_BYTES         1536
 
 // Chip IDs and their registers (Bosch's and the makers' APIs and
 // datasheets, as the drivers and general knowledge have them)
@@ -142,10 +156,33 @@ typedef Stm32HalI2CTransport I2C;
 #define LSM303_MAG_ID_REG       0x0A       // "H43" in 0x0A..0x0C
 
 // ---- the console ----------------------------------------------------------
-// A ring the tasks write (under console_mutex) and consoleTask hands to USART2
-static char g_console[CONSOLE_RING];
-static uint32_t g_conHead = 0, g_conTail = 0;
-static uint32_t g_conDropped = 0;
+// The PuTTY terminal (USART2) is a GUI: the home screen (the MPL3115A2's
+// cell, the command line) framed at the top, and below it a pane of the
+// console's last lines. consolePrint() adds to those lines (under
+// console_mutex, which the terminal also takes to read them) and asks the
+// GUI to draw; the terminal is the only thing that writes to USART2.
+// The terminal and these lines are in SRAM2 (the linker script's .ram2,
+// not cleared at start-up: their constructors and first use set every byte
+// they read), as SRAM1 is full.
+#define IN_RAM2 __attribute__((section(".ram2")))
+static idisplay::xLogLines<CONSOLE_LOG_ROWS, CONSOLE_LOG_COLS> g_logLines IN_RAM2;
+static std::atomic<idisplay::xGui *> g_gui{nullptr};   // set once consoleTask has started it
+
+// The log pane's own lock: held only while a finished line is copied in or
+// out. Writers also hold console_mutex around a whole append.
+static osMutexId_t g_logMutex = nullptr;
+static void logLock(void *) { osMutexAcquire(g_logMutex, osWaitForever); }
+static void logUnlock(void *) { osMutexRelease(g_logMutex); }
+
+// Asks the GUI to draw again (new data, a new console line, a key). From a
+// task or an interrupt; dropped while an event is already waiting, which
+// draws everything anyway.
+static void guiRefresh(void)
+{
+  idisplay::xGui *gui = g_gui.load(std::memory_order_acquire);
+  if (gui != nullptr)
+    gui->post(idisplay::xGuiEvent::refresh(), 0);
+}
 
 // A command line typed on the console, handed from the UART interrupt to
 // sensorTask: g_cmdReady set once it is complete, cleared when taken
@@ -157,8 +194,8 @@ static void consolePrint(const char *fmt, ...) __attribute__((format(printf, 1, 
 // The HAL UART and I2C interrupt callbacks are in iTransport/hw/stm32/src
 // (Stm32UartItCallbacks.cpp, Stm32I2CItCallbacks.cpp): don't define them here.
 
-// printf to the console. Tasks only; a line that doesn't fit is dropped
-// and counted.
+// printf to the console's log pane. Tasks only. Lines end at '\n' ('\r' is
+// dropped); one longer than the pane is cut there.
 static void consolePrint(const char *fmt, ...)
 {
   char line[256];
@@ -172,51 +209,97 @@ static void consolePrint(const char *fmt, ...)
     n = sizeof(line) - 1;
   if (console_mutexHandle == nullptr || osMutexAcquire(console_mutexHandle, 20) != osOK)
     return;
-  if (g_conHead - g_conTail + (uint32_t) n > CONSOLE_RING) {
-    ++g_conDropped;
-  } else {
-    for (int i = 0; i < n; ++i)
-      g_console[(g_conHead + i) % CONSOLE_RING] = line[i];
-    g_conHead += n;
-  }
+  g_logLines.append(line, (size_t) n);
   osMutexRelease(console_mutexHandle);
+  guiRefresh();
 }
 
-// Keys typed on the console, a line at a time (Enter ends it; Backspace
-// works). Interrupt context. A line typed while the last is still waiting
-// is dropped. The terminal should echo locally: nothing is sent back.
+// The terminal's keys (interrupt context). Escape sequences (the arrow
+// keys), Ctrl-L, and Enter or Backspace on an empty command line go to the
+// GUI (xTerminalKeys); printable characters build the command line, which
+// the home screen shows on its bottom row, and Enter hands it to
+// sensorTask. Nothing is echoed by the terminal: turn PuTTY's local echo
+// off. A line finished while the last is still waiting is kept, to send
+// again with Enter.
 struct ConsoleKeys : iTransportRxSink {
   char buf[CONSOLE_LINE];
-  uint8_t len = 0;
+  std::atomic<uint8_t> len{0};
+  idisplay::xTerminalKeys *keys = nullptr;   // set before the UART's sink is
+  uint8_t esc = 0;                           // 1 after ESC, 2 in ESC [ ..., 3 after ESC O
+  bool lastCr = false;
+  void key(uint8_t b) { if (keys != nullptr) keys->onByteReceived(b); }
   void onByteReceived(uint8_t b) override {
-    if (b == '\r' || b == '\n') {
-      if (len != 0 && !g_cmdReady.load(std::memory_order_acquire)) {
-        memcpy(g_cmd, buf, len);
-        g_cmd[len] = 0;
-        g_cmdReady.store(true, std::memory_order_release);
-      }
-      len = 0;
-    } else if (b == 0x08 || b == 0x7F) {
-      if (len != 0)
-        --len;
-    } else if (b >= 0x20 && len < CONSOLE_LINE - 1) {
-      buf[len++] = (char) b;
+    if (esc != 0) {
+      key(b);
+      if (esc == 1)
+        esc = b == '[' ? 2 : b == 'O' ? 3 : 0;
+      else if (esc == 3 || (b >= 0x40 && b <= 0x7E))
+        esc = 0;                             // the sequence's last byte
+      return;
     }
+    if (b == 0x1B) {
+      esc = 1;
+      key(b);
+      return;
+    }
+    const bool cr = b == '\r';
+    if (b == '\n' && lastCr) {              // CR LF: one Enter
+      lastCr = false;
+      return;
+    }
+    lastCr = cr;
+    const uint8_t n = len.load(std::memory_order_relaxed);
+    if (cr || b == '\n') {
+      if (n == 0) {
+        key('\r');
+      } else if (!g_cmdReady.load(std::memory_order_acquire)) {
+        memcpy(g_cmd, buf, n);
+        g_cmd[n] = 0;
+        g_cmdReady.store(true, std::memory_order_release);
+        len.store(0, std::memory_order_release);
+      }
+    } else if (b == 0x08 || b == 0x7F) {
+      if (n == 0)
+        key(b);
+      else
+        len.store((uint8_t) (n - 1), std::memory_order_release);
+    } else if (b == 0x0C) {
+      key(b);                                // Ctrl-L: repaint
+    } else if (b >= 0x20 && b < 0x7F && n < CONSOLE_LINE - 1) {
+      buf[n] = (char) b;
+      len.store((uint8_t) (n + 1), std::memory_order_release);
+    } else {
+      return;
+    }
+    guiRefresh();
+  }
+  // The line so far, for the home screen (the GUI task)
+  uint8_t copy(char *out, uint8_t cap) const {
+    uint8_t n = len.load(std::memory_order_acquire);
+    if (n > cap - 1)
+      n = (uint8_t) (cap - 1);
+    memcpy(out, buf, n);
+    out[n] = 0;
+    return n;
   }
 };
 static ConsoleKeys consoleKeys;
 
 static void printHelp(void)
 {
-  consolePrint("\r\nNUCLEO-L432KC sensor bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), 100 kHz\r\n"
-               "commands (Enter to finish; turn on your terminal's local echo):\r\n"
-               "  s          scan the I2C bus again (sensors are only started by the first scan)\r\n"
-               "  e 131      the station's elevation in feet (e 40m for metres), for the sea-level readings\r\n"
-               "  b 30.54    calibrate: make each barometer's sea-level reading this many inHg now\r\n"
-               "  o          clear the calibration offsets\r\n"
-               "  a 30.36    the MPL3115A2's altimeter setting (its sea-level reference) in inHg, for its altitude\r\n"
-               "  t 2026-10-19 14:05:00   set the DS1307's time (24 hour)\r\n"
-               "  h          this help\r\n\r\n");
+  static const char *const lines[] = {
+    "NUCLEO-L432KC sensor bring-up: I2C1 SCL=D1 (PA9) SDA=D0 (PA10), 100 kHz",
+    "type a command, Enter to run it (PuTTY's local echo off); Ctrl-L repaints",
+    "  s         scan the I2C bus again (reports only)",
+    "  e 131     the station's elevation, feet (e 40m: metres)",
+    "  b 30.54   calibrate each barometer's sea-level reading to this, inHg",
+    "  o         clear the calibration offsets",
+    "  a 30.36   the MPL3115A2's altimeter setting, inHg, for its altitude",
+    "  t 2026-10-19 14:05:00   set the DS1307's time (24 hour)",
+    "  h         this help",
+  };
+  for (const char *l : lines)
+    consolePrint("%s\n", l);
 }
 
 // "-12.34" from a double with `decimals` places, without printf float
@@ -287,6 +370,8 @@ public:
   // Console commands that only some sensors take
   virtual bool setTime(const DS1307::ds1307_time_t &) { return false; }
   virtual bool setAltimeterSetting(float pa) { (void) pa; return false; }   // sea-level reference, Pa
+  // A barometer's sea-level figure (Pa), after each reading
+  virtual void onSeaLevel(float pa) { (void) pa; }
 };
 
 class Aht20 : public Sensor {
@@ -527,12 +612,28 @@ public:
   const Barometer *barometer() override { return &baro; }
 };
 
+// The MPL3115A2's cell on the console's GUI, once one is found (the home
+// screen draws it)
+static std::atomic<idisplay::xCell *> g_mplCell{nullptr};
+
+// A label's value from a float another thread stores (NAN shows "--")
+static double loadFloat(const void *v)
+{
+  return static_cast<const std::atomic<float> *>(v)->load(std::memory_order_relaxed);
+}
+
 // Both modes each period: the pressure (a barometer measurement), then the
 // chip's own altitude (an altimeter measurement) from the sea-level
 // reference the a command gives it; 29.92 inHg (pressure altitude) until then.
+// Its readings also go to its cell on the console's GUI: the sensor thread
+// stores them here and the GUI task reads them (never the driver, whose
+// getters clear its new-data flag).
 class Mpl3115a2 : public Sensor {
   mpl3115a2::xmpl3115a2<I2C> d;
   ReadingBarometer baro;
+  std::atomic<float> tempC{NAN}, pressHpa{NAN}, seaInHg{NAN}, altM{NAN}, refInHg{NAN};
+  idisplay::xLabel labels[5];
+  idisplay::xCell cell;
   static mpl3115a2::mpl3115a2_param_t param() {
     mpl3115a2::mpl3115a2_param_t p;
     p.mode = mpl3115a2::mpl3115a2_both_mode;
@@ -540,12 +641,27 @@ class Mpl3115a2 : public Sensor {
     return p;
   }
 public:
-  explicit Mpl3115a2(uint8_t a) : Sensor("mpl3115a2", a), d(param(), &hi2c1, a, i2c1_mutexHandle) { d.setDebugTag(tag); }
+  explicit Mpl3115a2(uint8_t a)
+    : Sensor("mpl3115a2", a), d(param(), &hi2c1, a, i2c1_mutexHandle),
+      labels{idisplay::xLabel::fn("Temperature", loadFloat, &tempC, 2, " \x7F" "C"),
+             idisplay::xLabel::fn("Pressure", loadFloat, &pressHpa, 2, " hPa"),
+             idisplay::xLabel::fn("Sea level", loadFloat, &seaInHg, 2, " inHg"),
+             idisplay::xLabel::fn("Altitude", loadFloat, &altM, 1, " m"),
+             idisplay::xLabel::fn("Altimeter setting", loadFloat, &refInHg, 2, " inHg")},
+      cell(0, 0, CONSOLE_COLS, 6, labels, 5, "MPL3115A2 (I2C1)") {
+    d.setDebugTag(tag);
+    g_mplCell.store(&cell, std::memory_order_release);
+    guiRefresh();
+  }
   void step(uint32_t now) override { d.main(now); }
   bool reading(Line &l) override {
     if (!d.newData()) return false;
     const float t = d.getTemp(), p = d.getPressure(), a = d.getAltitude();   // degrees C, hPa, m
     baro.pa = p * 100.0f;
+    tempC.store(t, std::memory_order_relaxed);
+    pressHpa.store(p, std::memory_order_relaxed);
+    altM.store(a, std::memory_order_relaxed);
+    refInHg.store(baro::paToInHg(d.seaLevelPressure()), std::memory_order_relaxed);
     l.temperature(t);
     l.value("P", p, 2, " hPa");
     l.value("alt", a, 1, " m");
@@ -559,6 +675,7 @@ public:
     return true;
   }
   bool setAltimeterSetting(float pa) override { return d.setSeaLevelPressure(pa); }
+  void onSeaLevel(float pa) override { seaInHg.store(baro::paToInHg(pa), std::memory_order_relaxed); }
   int state() override { return (int) d.state(); }
   uint32_t periodMs() const override { return mpl3115a2::mpl3115a2_period_ms; }
   const Barometer *barometer() override { return &baro; }
@@ -809,6 +926,7 @@ static void sensorThread(void *arg)
       continue;
     if (r->slp != nullptr) {
       const float alt = r->slp->getPressure();
+      s->onSeaLevel(alt);
       char sl[16], sh[16], el[16], of[16];
       formatFixed(sl, sizeof(sl), baro::paToInHg(alt), 2);
       formatFixed(sh, sizeof(sh), alt / 100.0, 2);
@@ -1240,6 +1358,9 @@ void app_init(void)
   g.Alternate = GPIO_AF7_USART1;
   HAL_GPIO_Init(DBG_TX_GPIO_Port, &g);
 #endif
+  g_logMutex = osMutexNew(nullptr);       // the console's log pane (before any task prints)
+  if (g_logMutex != nullptr)
+    g_logLines.setLock(logLock, logUnlock, nullptr);
   g_busClear = busClear();
   if (g_busClear != 0)
     DBG_FAULT("app", "bus-clear", (int32_t) g_busClear);
@@ -1398,45 +1519,75 @@ void app_sensor_task(void *argument)
   }
 }
 
+// ---- the console's GUI ------------------------------------------------------
+// The home screen: the MPL3115A2's cell once one is found, and the command
+// line being typed on the bottom row. Drawn by the GUI task.
+class HomeScreen : public idisplay::xScreen {
+public:
+  void onKey(idisplay::xKey key, idisplay::xKeyAction action, idisplay::xNavigator &nav) override {
+    (void) action; (void) nav;
+    idisplay::xCell *c = g_mplCell.load(std::memory_order_acquire);
+    if (c != nullptr && key == idisplay::xKey::Up)
+      c->scroll(-1);
+    else if (c != nullptr && key == idisplay::xKey::Down)
+      c->scroll(1);
+  }
+  void render(idisplay::iTextSurface &s) override {
+    idisplay::xCell *c = g_mplCell.load(std::memory_order_acquire);
+    if (c != nullptr) {
+      c->render(s);
+    } else {
+      s.setInverse(true);
+      s.printAt(0, 0, "NUCLEO-L432KC sensor bring-up");
+      s.setInverse(false);
+      s.printAt(0, 2, "no MPL3115A2 found (yet)");
+      s.printAt(0, 3, "the other sensors: below");
+    }
+    // "> a 30.3_", its end when longer than the row
+    char line[CONSOLE_LINE];
+    const uint8_t n = consoleKeys.copy(line, sizeof(line));
+    const uint8_t room = CONSOLE_COLS - 3;
+    s.printAt(0, CONSOLE_ROWS - 1, "> ");
+    s.print(line + (n > room ? n - room : 0));
+    s.print("_");
+  }
+};
+static HomeScreen g_home;
+
+static void guiSleep(uint32_t ms) { osDelay(ms); }
+
 /**
-  * @brief  consoleTask's body (main.c's StartConsoleTask calls it): hands
-  *         the console ring to USART2 (the ST-LINK's virtual COM port), a
-  *         piece at a time, listens for keys, and sends the debug log.
+  * @brief  consoleTask's body (main.c's StartConsoleTask calls it): puts
+  *         the GUI on USART2 (the ST-LINK's virtual COM port), in a task
+  *         of its own, takes the keys, and sends the debug log.
   */
 void app_console_task(void *argument)
 {
   (void) argument;
   static Stm32HalUartTransport port(&huart2);
-  static uint8_t chunk[128];               // sent from here by interrupt: static
-  uint32_t lastDropped = 0;
+  idisplay::xTerminalConfig cfg;
+  cfg.sleep = guiSleep;                    // while the UART is busy
+  cfg.log = &g_logLines;
+  static idisplay::xTerminal<CONSOLE_COLS, CONSOLE_ROWS, CONSOLE_LOG_ROWS, CONSOLE_LOG_COLS> term IN_RAM2 (port, cfg);
+  static idisplay::xGui gui(term, g_home);
+  static idisplay::xTerminalKeys keys(
+      [](idisplay::xKey k, idisplay::xKeyAction a, void *g) {
+        static_cast<idisplay::xGui *>(g)->post(idisplay::xGuiEvent::keyEvent(k, a), 0);
+      }, &gui,
+      [](void *t) {                          // Ctrl-L
+        static_cast<idisplay::xTerminalBase *>(t)->redraw();
+        guiRefresh();
+      }, &term);
+  consoleKeys.keys = &keys;
   port.setRxSink(consoleKeys);
+  if (gui.start("gui", GUI_STACK_BYTES, osPriorityBelowNormal))
+    g_gui.store(&gui, std::memory_order_release);
+  else
+    DBG_FAULT("app", "gui-start");         // no memory: nothing on the console
 
   for(;;)
   {
-    osMutexAcquire(console_mutexHandle, osWaitForever);
-    const uint32_t avail = g_conHead - g_conTail;
-    const uint32_t len = avail < sizeof(chunk) ? avail : sizeof(chunk);
-    for (uint32_t i = 0; i < len; ++i)
-      chunk[i] = (uint8_t) g_console[(g_conTail + i) % CONSOLE_RING];
-    const uint32_t dropped = g_conDropped;
-    osMutexRelease(console_mutexHandle);
-
     dbg::poll();                           // the debug log, to USART1 (nothing if it isn't the log's)
-    if (len == 0) {
-      osDelay(5);
-      continue;
-    }
-    while (!port.write(chunk, len))        // the last piece still going out
-      osDelay(1);
-    // write() only started it: wait until it is out before chunk is reused
-    while (huart2.gState != HAL_UART_STATE_READY)
-      osDelay(1);
-    osMutexAcquire(console_mutexHandle, osWaitForever);
-    g_conTail += len;
-    osMutexRelease(console_mutexHandle);
-    if (dropped != lastDropped) {
-      lastDropped = dropped;
-      consolePrint("(console: %lu line(s) dropped so far)\r\n", (unsigned long) dropped);
-    }
+    osDelay(5);
   }
 }

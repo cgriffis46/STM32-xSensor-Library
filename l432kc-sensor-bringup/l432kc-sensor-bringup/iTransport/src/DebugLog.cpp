@@ -16,6 +16,8 @@ const size_t kTxBuf = 128;     // what one write() hands the UART
 
 struct State {
     iTransport* out = nullptr;
+    Tap         tap = nullptr;
+    void*       tapCtx = nullptr;
     Port        port = {nullptr, nullptr, nullptr, nullptr};
     // The ring. Producers (any context) and poll() both change it only
     // under the port's lock.
@@ -59,7 +61,14 @@ void begin(iTransport* out, const Port& port) {
     s.port = port;
 }
 
+void setTap(Tap fn, void* ctx) {
+    s.tap = fn;
+    s.tapCtx = ctx;
+}
+
 void reset() {
+    s.tap = nullptr;
+    s.tapCtx = nullptr;
     s.out = nullptr;
     s.port = Port{nullptr, nullptr, nullptr, nullptr};
     s.head = s.tail = s.seq = s.dropped = s.sent = 0;
@@ -68,7 +77,7 @@ void reset() {
 }
 
 void line(const char* tag, const char* what, const int32_t* values, size_t count) {
-    if (s.out == nullptr) return;   // no debug UART: nothing to keep lines for
+    if (s.out == nullptr && s.tap == nullptr) return;   // no UART and no tap: nothing to keep lines for
 
     // Everything but the sequence number is formatted outside the lock.
     const uint32_t ms = s.port.nowMs ? s.port.nowMs() : 0;
@@ -107,18 +116,26 @@ void pin(uint8_t id, bool level) {
 }
 
 void poll() {
-    if (s.out == nullptr) return;
+    if (s.out == nullptr && s.tap == nullptr) return;
     // A synchronous UART takes every write at once; a DMA one takes the
     // next only after the last has gone. Either way stop when refused.
+    // The tap sees each piece once, as it is taken from the ring.
     for (int round = 0; round < 8; ++round) {
         if (s.txLen == 0) {
-            Lock lock;
-            char* b = s.tx[s.txNext];
-            while (s.txLen < kTxBuf && s.tail != s.head) {
-                b[s.txLen++] = s.ring[(s.tail++) & (kRing - 1)];
+            {
+                Lock lock;
+                char* b = s.tx[s.txNext];
+                while (s.txLen < kTxBuf && s.tail != s.head) {
+                    b[s.txLen++] = s.ring[(s.tail++) & (kRing - 1)];
+                }
             }
+            if (s.txLen && s.tap) s.tap(s.tx[s.txNext], s.txLen, s.tapCtx);
         }
         if (s.txLen == 0) return;
+        if (s.out == nullptr) {                     // no UART: the tap only
+            s.txLen = 0;
+            continue;
+        }
         if (!s.out->write((const uint8_t*)s.tx[s.txNext], s.txLen)) return;   // still sending: next time
         s.sent += (uint32_t)s.txLen;
         s.txLen = 0;

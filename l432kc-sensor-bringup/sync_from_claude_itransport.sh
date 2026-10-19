@@ -24,10 +24,13 @@ STM32_INC="Stm32DebugPort.h Stm32HalI2CTransport.h Stm32HalOneWireTransport.h St
 STM32_SRC="Stm32HalI2CTransport.cpp Stm32HalOneWireTransport.cpp Stm32HalUartTransport.cpp Stm32I2CItCallbacks.cpp Stm32UartItCallbacks.cpp"
 # isensor's own headers: the state machine and the sensor interfaces
 IS_INC="SensorStateMachine.h Barometer.h Thermometer.h Hygrometer.h SeaLevelBarometer.h"
+# iDisplay: the console's GUI on the PuTTY terminal (xTerminal, xGui, xCell).
+# Whole folders: the linker's --gc-sections drops what isn't called.
+ID_DIRS="inc src gui/inc gui/src hw/freertos/inc hw/freertos/src hmi/inc hmi/src terminal/inc terminal/src"
 
 test -d "$IT" || { echo "no $IT: is $SRC a Claude-iTransport checkout?" >&2; exit 1; }
 
-rm -rf "$DST/iTransport/inc" "$DST/iTransport/src" "$DST/iTransport/hw" "$DST/isensor"
+rm -rf "$DST/iTransport/inc" "$DST/iTransport/src" "$DST/iTransport/hw" "$DST/isensor" "$DST/iDisplay"
 mkdir -p "$DST/iTransport/inc" "$DST/iTransport/src" "$DST/iTransport/hw/freertos/inc" \
          "$DST/iTransport/hw/stm32/inc" "$DST/iTransport/hw/stm32/src" "$DST/isensor/inc"
 
@@ -40,6 +43,10 @@ for f in $IS_INC; do cp "$SRC/isensor/inc/$f" "$DST/isensor/inc/"; done
 for s in $SENSORS; do
   mkdir -p "$DST/isensor/$s"
   cp -r "$SRC/isensor/$s/inc" "$SRC/isensor/$s/src" "$DST/isensor/$s/"
+done
+for d in $ID_DIRS; do
+  mkdir -p "$DST/iDisplay/$d"
+  cp "$SRC/iDisplay/$d/"* "$DST/iDisplay/$d/"
 done
 cp "$SRC/LICENSE" "$DST/iTransport/LICENSE"
 
@@ -61,6 +68,8 @@ commit $COMMIT ($BRANCH, $DATE; MIT, see iTransport/LICENSE), by
   isensor/inc                    <- isensor/inc ($IS_INC)
   isensor/<driver>/inc, src      <- isensor/<driver>, for:
                                     $SENSORS
+  iDisplay/<folder>              <- iDisplay/<folder>, for:
+                                    $ID_DIRS
 
 From ST (BSD-3): Drivers/STM32L4xx_HAL_Driver is STMicroelectronics/stm32l4xx_hal_driver
 v1.13.6.

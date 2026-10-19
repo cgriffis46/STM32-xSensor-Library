@@ -84,6 +84,11 @@
 									<listOptionValue builtIn="false" value="../isensor/PM25/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/si7021/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/gui/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hw/freertos/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hmi/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/terminal/inc"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.540242092" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -119,6 +124,11 @@
 									<listOptionValue builtIn="false" value="../isensor/PM25/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/si7021/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/gui/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hw/freertos/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hmi/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/terminal/inc"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols.1323183965" name="Define symbols (-D)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols" useByScannerDiscovery="false" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="DEBUG"/>
@@ -158,6 +168,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iTransport"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iDisplay"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -240,6 +251,11 @@
 									<listOptionValue builtIn="false" value="../isensor/PM25/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/si7021/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/gui/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hw/freertos/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hmi/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/terminal/inc"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1697245238" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -275,6 +291,11 @@
 									<listOptionValue builtIn="false" value="../isensor/PM25/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/sht31/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/si7021/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/gui/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hw/freertos/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/hmi/inc"/>
+									<listOptionValue builtIn="false" value="../iDisplay/terminal/inc"/>
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols.451611740" name="Define symbols (-D)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.cpp.compiler.option.definedsymbols" useByScannerDiscovery="false" valueType="definedSymbols">
 									<listOptionValue builtIn="false" value="USE_HAL_DRIVER"/>
@@ -313,6 +334,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iTransport"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="iDisplay"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>

@@ -63,7 +63,7 @@ Notes on recognising the chips:
 | Power | **3V3**, **GND** | | every sensor's VIN, GND |
 | Debug log | **D5** | PB6, USART1_TX | to a 3.3 V USB-serial adapter's RX, or a Saleae; 921600 8N1 |
 | (USART1 RX) | D4 | PB7 | unused by default |
-| Console | USB | PA2/PA15, USART2 | the ST-LINK's virtual COM port, 115200 8N1 |
+| Console | USB | PA2/PA15, USART2 | the ST-LINK's virtual COM port, 115200 8N1: a GUI for PuTTY (see "The console") |
 
 * **I2C pull-ups.** Breakout boards carry pull-ups on SDA and SCL. A bare chip
   needs 4.7k from each to 3V3.
@@ -88,9 +88,10 @@ start-up. The UART hears what it sends through the D4 link, as Claude-iTransport
 ## Using it
 
 1. Flash it (STM32CubeIDE, or STM32CubeProgrammer with the `.elf`).
-2. Open the ST-LINK's virtual COM port at 115200 8N1, with local echo on.
-3. At start-up the board scans the bus. With a BME680 and an SHT31 it looks
-   like this:
+2. Open the ST-LINK's virtual COM port at 115200 8N1 in PuTTY, set up as in
+   "The console" below (local echo off).
+3. At start-up the board scans the bus. With a BME680 and an SHT31 the
+   console's lines look like this:
 
        I2C scan: 0x44 0x77
          0x44: SHT31
@@ -142,6 +143,45 @@ start-up. The UART hears what it sends through the D4 link, as Claude-iTransport
      up in the driver's header, as `<driver>_state_t`, where the last value
      is the error state.
    * **LD3 (green)** toggles on each reading, from any sensor.
+
+### The console
+
+The console is a GUI drawn on the terminal (Claude-iTransport's iDisplay:
+`xTerminal`, `xGui`, `xCell`). At the top, in a frame, is the home screen; below
+it is a pane of the console's last 14 lines (the scan, each reading, the
+commands' replies). Once an MPL3115A2 is found, the home screen shows its
+cell:
+
+    +----------------------------------------+
+    |MPL3115A2 (I2C1)                        |
+    |Temperature                     25.38 °C|
+    |Pressure                     1022.99 hPa|
+    |Sea level                     30.34 inHg|
+    |Altitude                          35.6 m|
+    |Altimeter setting             30.34 inHg|
+    |> a 30.36_                              |
+    +----------------------------------------+
+    ...
+    mpl3115a2 T 25.38 C (77.7 F)  P 1022.99 hPa  alt 35.6 m (117 ft) at 30.34 inHg
+
+The bottom row is the command line. Type a command (see "Commands") and press
+Enter; Backspace works. The arrow keys, and Enter or Backspace on an empty line,
+go to the GUI. Ctrl-L repaints everything (after reopening PuTTY, say). Until
+an MPL3115A2 is found the home screen says so, and the other sensors' readings
+are in the pane.
+
+PuTTY settings:
+
+| Where | Setting |
+|-------|---------|
+| Session | Serial, the ST-LINK's COM port, speed 115200 |
+| Connection > Serial | 8 data bits, 1 stop bit, no parity, no flow control |
+| Terminal | Local echo **Force off**, local line editing **Force off** (the board draws what you type) |
+| Window | at least 80 x 24 (the default) |
+| Window > Translation | Remote character set UTF-8 (the degree sign) |
+
+The pane's lines are cut at 79 characters, so the end of a long reading (the
+MPL3115A2's sea-level figure, say) is only in its cell.
 
 ### Sea-level pressure
 
@@ -265,8 +305,20 @@ edit the copies here.
     a transfer until it lands, and the mutex isn't recursive.
   * The driver objects are built only for the sensors found: function-local
     statics, never freed.
-* **consoleTask** (`app_console_task()`): hands the console ring to USART2, and
-  calls `dbg::poll()`, which sends the debug log to USART1.
+* **consoleTask** (`app_console_task()`): builds the console's GUI on USART2
+  (an `xTerminal`, 40 x 7 framed, with a 14 line log pane 79 wide), starts its
+  task, takes the keys, and calls `dbg::poll()`, which sends the debug log to
+  USART1.
+* **The GUI task** (`xGui`, 1.5 KB of stack, below normal priority) is the only
+  thing that writes to USART2. It draws when asked: a new console line, a new
+  MPL3115A2 reading, a key. `consolePrint()` adds to the log pane (under
+  `console_mutex`, the pane's own lock inside it); the MPL3115A2's thread
+  stores its readings in atomics, which the cell's labels read.
+* **SRAM2:** the terminal's buffers and the log pane (5 KB) are in SRAM2,
+  through a `.ram2` section added by hand to `STM32L432KCUX_FLASH.ld`
+  (`NOLOAD`: not cleared at start-up, which they don't need). SRAM1 (48 KB) is
+  otherwise nearly full: 44 KB, 32 KB of it the FreeRTOS heap. If CubeIDE ever
+  writes a new linker script, put the section back.
 * **The FreeRTOS heap** is 32 KB, enough for about a dozen sensor threads.
 * **The system clock** is 80 MHz (MSI + PLL, trimmed by the LSE crystal X2).
   From cold, the LSE takes about 145 ms to start.
@@ -295,7 +347,12 @@ edit the copies here.
     `osDelay(1)`.
   * Earlier versions of this project ran the BME280, the BMP390 and the SHT31
     on the same board (2026-10-18), with the same drivers and settings.
-  * Not yet run on a chip: HMC6352, MPL3115A2, DS1307, MMC56x3, LSM303DLHC,
+  * The MPL3115A2 ran on 2026-10-19 (Saleae captures and the console), in
+    barometer and both modes, before the console became a GUI.
+  * The console's GUI has not run on the board or in PuTTY. It ran here on
+    iDisplay's VT100 model (what the terminal sends, replayed), with the
+    command-line handling and the home screen taken from `app.cpp`.
+  * Not yet run on a chip: HMC6352, DS1307, MMC56x3, LSM303DLHC,
     the BMP388, and the PM25 and DS18B20 options. Those drivers have run only
     in Claude-iTransport's host tests, against simulated chips.
 * **The bus clear** has run only on the PC: its code against a simulated
