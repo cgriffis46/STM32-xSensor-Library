@@ -100,6 +100,14 @@ inline void pulse(uint8_t id) { pin(id, true); pin(id, false); }
 // Sends what is queued, as far as the UART will take it. Thread only.
 void poll();
 
+// Also hands the log's text to fn, in pieces of up to 128 bytes as poll()
+// takes them from the ring, in poll()'s thread. A piece may end in the
+// middle of a line; the next one carries on from there. With no UART
+// (begin(nullptr, port)) poll() still runs for the tap: a log shown only
+// on a display (iDisplay's xLogLines). null: no tap.
+typedef void (*Tap)(const char* text, size_t len, void* ctx);
+void setTap(Tap fn, void* ctx);
+
 Stats stats();
 
 // For tests: forget everything (the ring, the counters, the port).

@@ -1,5 +1,5 @@
 Vendored from https://github.com/cgriffis46/Claude-iTransport
-commit 8aa4900 (main, 2026-10-19; MIT, see iTransport/LICENSE), by
+commit 1520624 (main, 2026-10-19; MIT, see iTransport/LICENSE), by
 ../sync_from_claude_itransport.sh. Copied unchanged:
 
   iTransport/inc, src            <- iTransport/itransport/inc, src
@@ -12,6 +12,8 @@ commit 8aa4900 (main, 2026-10-19; MIT, see iTransport/LICENSE), by
   isensor/inc                    <- isensor/inc (SensorStateMachine.h Barometer.h Thermometer.h Hygrometer.h SeaLevelBarometer.h)
   isensor/<driver>/inc, src      <- isensor/<driver>, for:
                                     aht20 bme280 bme680 bmp280 bmp390 DS18B20 ds1307 HMC6352 htu21df lps35hw lsm303dlhc mmc56x3 mpl3115a2 PM25 sht31 si7021
+  iDisplay/<folder>              <- iDisplay/<folder>, for:
+                                    inc src gui/inc gui/src hw/freertos/inc hw/freertos/src hmi/inc hmi/src terminal/inc terminal/src
 
 From ST (BSD-3): Drivers/STM32L4xx_HAL_Driver is STMicroelectronics/stm32l4xx_hal_driver
 v1.13.6.

@@ -167,6 +167,17 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /* SRAM2, not cleared at start-up: for objects that set every byte they
+     read themselves (the console's terminal and log pane, app.cpp), placed
+     with __attribute__((section(".ram2"))). Added by hand, not by CubeMX. */
+  .ram2 (NOLOAD) :
+  {
+    . = ALIGN(4);
+    *(.ram2)
+    *(.ram2*)
+    . = ALIGN(4);
+  } >RAM2
+
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */
   ._user_heap_stack :
   {
