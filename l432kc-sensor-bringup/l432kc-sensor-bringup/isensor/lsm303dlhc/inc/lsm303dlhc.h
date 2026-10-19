@@ -125,7 +125,7 @@ typedef enum lsm303dlhc_accel_state_t{
 typedef struct lsm303dlhc_accel_param_t{
 	lsm303dlhc_accel_odr_t odr;			// the chip samples at this rate by itself
 	lsm303dlhc_accel_scale_t scale;
-	uint32_t period_ms;					// between readings
+	uint32_t period_ms;					// between readings, start to start
 }lsm303dlhc_accel_param_t;
 
 // ---- magnetometer ----
@@ -183,7 +183,7 @@ typedef enum lsm303dlhc_mag_state_t{
 typedef struct lsm303dlhc_mag_param_t{
 	lsm303dlhc_mag_rate_t rate;			// the chip converts at this rate by itself
 	lsm303dlhc_mag_gain_t gain;
-	uint32_t period_ms;					// between readings
+	uint32_t period_ms;					// between readings, start to start
 }lsm303dlhc_mag_param_t;
 
 // All times in ms.
@@ -228,6 +228,7 @@ protected:
 private:
 	lsm303dlhc_accel_param_t _param;
 	uint32_t phase_start;	// when the current reading began
+	uint32_t _lastStart;	// when the last reading started: the period runs from here
 	bool _start_measurement;
 	bool _newData;
 	float _x, _y, _z;
@@ -272,6 +273,7 @@ protected:
 
 private:
 	lsm303dlhc_mag_param_t _param;
+	uint32_t _lastStart;	// when the last reading started: the period runs from here
 	bool _start_measurement;
 	bool _newData;
 	float _x, _y, _z;

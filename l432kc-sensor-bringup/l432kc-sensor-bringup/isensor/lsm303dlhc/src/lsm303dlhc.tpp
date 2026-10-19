@@ -22,6 +22,7 @@ lsm303dlhc_accel<TTransport>::lsm303dlhc_accel(const lsm303dlhc_accel_param_t &p
 	: base(lsm303dlhc_accel_init_state, lsm303dlhc_accel_error_state, lsm303dlhc_bus_timeout_ms, std::forward<TArgs>(transportArgs)...) {
 	_param=param;
 	phase_start=0;
+	_lastStart=0;
 	_start_measurement=false;
 	_newData=false;
 	_x=NAN; _y=NAN; _z=NAN;
@@ -70,19 +71,23 @@ void lsm303dlhc_accel<TTransport>::main(uint32_t nowMs){
 		break;
 	case lsm303dlhc_accel_wait_ctrl4_state:
 		if(landed(nowMs)){
+			_lastStart=nowMs; // the first reading a period from now
 			enter(lsm303dlhc_accel_done_state,nowMs);
 		}
 		break;
 	case lsm303dlhc_accel_done_state:
-		if(elapsed(nowMs,_param.period_ms)||_start_measurement){
+		// The period runs from the start of the last reading, so waiting
+		// for a sample and the transfers don't add to it.
+		if((nowMs-_lastStart)>=_param.period_ms||_start_measurement){
 			_start_measurement=false;
 			phase_start=nowMs;
+			_lastStart=nowMs;
 			enter(lsm303dlhc_accel_status_state,nowMs);
 		} else {
 			// No longer than lsm303dlhc_request_poll_ms at a time, so a
 			// startMeasurement() request is seen without waiting out
 			// the whole period.
-			const uint32_t left=_param.period_ms-(nowMs-last_update);
+			const uint32_t left=_param.period_ms-(nowMs-_lastStart);
 			sleep(left<lsm303dlhc_request_poll_ms?left:lsm303dlhc_request_poll_ms);
 		}
 		break;
@@ -169,6 +174,7 @@ template <typename... TArgs>
 lsm303dlhc_mag<TTransport>::lsm303dlhc_mag(const lsm303dlhc_mag_param_t &param, TArgs&&... transportArgs)
 	: base(lsm303dlhc_mag_init_state, lsm303dlhc_mag_error_state, lsm303dlhc_bus_timeout_ms, std::forward<TArgs>(transportArgs)...) {
 	_param=param;
+	_lastStart=0;
 	_start_measurement=false;
 	_newData=false;
 	_x=NAN; _y=NAN; _z=NAN;
@@ -219,15 +225,18 @@ void lsm303dlhc_mag<TTransport>::main(uint32_t nowMs){
 		break;
 	case lsm303dlhc_mag_wait_mr_state:
 		if(landed(nowMs)){
+			_lastStart=nowMs; // the first reading a period from now
 			enter(lsm303dlhc_mag_done_state,nowMs);
 		}
 		break;
 	case lsm303dlhc_mag_done_state:
-		if(elapsed(nowMs,_param.period_ms)||_start_measurement){
+		// The period runs from the start of the last reading.
+		if((nowMs-_lastStart)>=_param.period_ms||_start_measurement){
 			_start_measurement=false;
+			_lastStart=nowMs;
 			enter(lsm303dlhc_mag_read_state,nowMs);
 		} else {
-			const uint32_t left=_param.period_ms-(nowMs-last_update);
+			const uint32_t left=_param.period_ms-(nowMs-_lastStart);
 			sleep(left<lsm303dlhc_request_poll_ms?left:lsm303dlhc_request_poll_ms);
 		}
 		break;
