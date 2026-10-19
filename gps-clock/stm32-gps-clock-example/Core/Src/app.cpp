@@ -381,6 +381,7 @@ void app_sensor_task(void *argument)
   r.gas_valid = r.heat_stable = false;
   uint32_t readings = 0;
   uint32_t lastReadingTick = 0;
+  bool printPending = false;             // a reading not printed yet
   uint32_t lastPrintTick = osKernelGetTickCount();
   float tMin = NAN, tMax = NAN;
   bool scanPending = false;
@@ -398,6 +399,7 @@ void app_sensor_task(void *argument)
       pressure.pa = r.pressure;
       ++readings;
       lastReadingTick = tick;
+      printPending = true;
       if (!isnan(r.temperature)) {
         if (isnan(tMin) || r.temperature < tMin) tMin = r.temperature;
         if (isnan(tMax) || r.temperature > tMax) tMax = r.temperature;
@@ -476,8 +478,11 @@ void app_sensor_task(void *argument)
           consolePrint("BME680 at 0x%02X: no reading%s (driver state %d%s)\r\n", addr,
                        readings == 0 ? " yet" : " for 7 s", (int) bme->state(),
                        bme->state() == BME680::bme680_error_state ? ", error: not answering, or a wrong chip ID" : "");
-        } else if (tick - lastReadingTick < 1000) {
-          // A new reading (one every 3 s): print it once
+        } else if (printPending) {
+          // A new reading (one every 3 s): print it once. A flag, not "less
+          // than a second old": the print's second drifts against the
+          // reading's, and one reading in ten went unprinted that way.
+          printPending = false;
           char ts[16], tf[16], hs[16], ps[16], sl[16], sh[16], el[16], of[16], gs[16], lo[16], hi[16];
           formatFixed(ts, sizeof(ts), r.temperature, 2);
           formatFixed(tf, sizeof(tf), r.temperature * 9.0 / 5.0 + 32.0, 1);

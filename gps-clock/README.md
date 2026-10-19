@@ -212,8 +212,15 @@ regeneration ever loses the calls, put the three lines back in those blocks.
     the next, still rising: a new sensor settling in. One reading's gas value
     was checked by hand from the bytes on the bus, with Bosch's formula
     (1240 ohm, as the driver gave).
-  * Not yet checked: gas values after hours of running, or anything against a
-    calibrated reference.
+  * After 1 h 43 min of running (2026-10-19): gas 208-211 kOhm, settled
+    from the first runs' 1-28 kOhm. 25.8 C (78.4 F), 32.5-32.9 %RH,
+    1031.4 hPa (30.59 inHg at sea level). Still a reading every 3000 ms,
+    with no faults.
+  * That capture showed one console line in about ten going unprinted: the
+    once-a-second print only took a reading less than a second old, and its
+    second drifts against the reading's. Fixed (a "not printed yet" flag),
+    but the fix hasn't run on the board yet.
+  * Not yet checked: anything against a calibrated reference.
   * Earlier bring-ups ran on this NUCLEO-L432KC on 2026-10-18: the BME280,
     then the BMP390 and SHT31, checked with Saleae captures.
 * **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
