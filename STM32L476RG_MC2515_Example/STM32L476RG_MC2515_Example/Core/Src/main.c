@@ -132,12 +132,6 @@ int main(void)
   /* add events, ... */
   /* USER CODE END RTOS_EVENTS */
 
-  /* Initialize leds */
-  BSP_LED_Init(LED_GREEN);
-
-  /* Initialize USER push-button, will be used to trigger an interrupt each time it's pressed.*/
-  BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
-
   /* Start scheduler */
   osKernelStart();
 
