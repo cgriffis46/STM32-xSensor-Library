@@ -79,6 +79,7 @@ void Error_Handler(void);
 #define LED1_GPIO_Port GPIOA
 #define CAN_INT_Pin GPIO_PIN_10
 #define CAN_INT_GPIO_Port GPIOA
+#define CAN_INT_EXTI_IRQn EXTI15_10_IRQn
 #define TMS_Pin GPIO_PIN_13
 #define TMS_GPIO_Port GPIOA
 #define TCK_Pin GPIO_PIN_14
