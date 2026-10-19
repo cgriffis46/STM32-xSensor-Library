@@ -103,6 +103,18 @@ start-up. The UART hears what it sends through the D4 link, as Claude-iTransport
    started only by that first good scan, and I2C isn't hot-pluggable: connect
    sensors with the board unplugged, then power up. `s` scans again later,
    but only reports.
+
+   Before the scan, the board clears a stuck bus. A reset of the STM32
+   (after flashing, or the button) doesn't reset the sensors, and one caught
+   sending a 0 keeps SDA low. If SDA is low at start, `app_init()` clocks SCL
+   by hand, up to 9 times, until SDA is released, then sends a START and a
+   STOP and gives I2C1 its pins back. If it had to, the console says so before the scan:
+
+       I2C1: SDA was held low at start; 3 clock(s) freed it
+
+   If SDA stays low after 9 clocks, or SCL itself is low, the console says
+   to check the wiring and power. A sensor without its ground wire can do
+   either.
 4. Each reading is printed as it comes, with a count at the end:
 
        sht31     T 24.97 C (76.9 F)  H 35.8 %RH | 12
@@ -154,6 +166,9 @@ out wrong. Each line is `<seq> <ms> <tag> <what> [<value>...]`
 C and C++ defines). The lines are:
 
 * `app start <rev> <dev>`: the chip's revision and device IDs.
+* `app bus-clear <n>`: SDA was low at start. A positive `n` is how many clocks
+  freed it; -1 means it was still low after 9; -2 means SCL was held low.
+  Nothing is logged when the bus was free.
 * `app chip-id <address> <id 0x00> <id 0xD0>`: what the scan read at 0x76 and
   0x77.
 * `app sensor <address> <count>`: a sensor's thread started.
@@ -220,6 +235,10 @@ edit the copies here.
 * **The system clock** is 80 MHz (MSI + PLL, trimmed by the LSE crystal X2).
   From cold, the LSE takes about 145 ms to start.
 * **I2C1** runs at 100 kHz.
+* **The bus clear** (`busClear()`, from `app_init()`) runs before the
+  scheduler and before the debug log is sent: the pins are open drain GPIOs
+  for at most 9 clocks of at least 10 us each. A free bus is only read, never
+  touched.
 
 ## Not verified
 
@@ -239,6 +258,12 @@ edit the copies here.
   * Not yet run on a chip: HMC6352, MPL3115A2, DS1307, MMC56x3, LSM303DLHC,
     the BMP388, and the PM25 and DS18B20 options. Those drivers have run only
     in Claude-iTransport's host tests, against simulated chips.
+* **The bus clear** has run only on the PC: its code against a simulated
+  sensor caught at each bit of a byte, one that never lets go, and SCL held
+  low. It hasn't yet freed a real stuck bus, and that a stuck bus is why a
+  second flash is sometimes needed is a guess, not yet seen in a capture.
+  The 9 clocks are from general knowledge of the I2C specification, not
+  checked against it here.
 * **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
   warnings, in all three USART1 settings: about 108 KB flash at -Os (180 KB at
   -O0) of 256 KB, and 47 KB RAM of 64 KB, 32 KB of it the FreeRTOS heap.
