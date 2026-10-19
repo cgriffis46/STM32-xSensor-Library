@@ -121,6 +121,17 @@ protected:
     // The same, counted from when the current state was entered.
     void sleepRemaining(uint32_t nowMs, uint32_t ms) { sleepRemaining(last_update, nowMs, ms); }
 
+    // Moves a period's start on to the next period: the last start plus
+    // the period, not nowMs, so noticing the period late (a sleep that
+    // overran, a loop that adds a tick each time round) doesn't add up,
+    // period after period. If that is a period or more behind nowMs (the
+    // thread was held up, or a fault) or ahead of it (a measurement asked
+    // for early), the period starts from nowMs instead. Wrap-safe.
+    static void nextPeriod(uint32_t& start, uint32_t nowMs, uint32_t periodMs) {
+        start += periodMs;
+        if ((uint32_t)(nowMs - start) >= periodMs) start = nowMs;
+    }
+
     // Body of every state that issues a bus operation. `started` is
     // what the transport returned. false may only mean the bus is in
     // use, so the state is left as it is to try again — until the bus

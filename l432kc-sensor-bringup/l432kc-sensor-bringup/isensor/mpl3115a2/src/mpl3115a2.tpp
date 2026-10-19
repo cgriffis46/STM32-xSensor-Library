@@ -156,7 +156,7 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 		} else if(_bar_in_changed){ // setSeaLevelPressure(), or a reset since
 			enter(mpl3115a2_bar_in_state,nowMs);
 		} else if((nowMs-_lastStart)>=mpl3115a2_period_ms){
-			_lastStart=nowMs;
+			this->nextPeriod(_lastStart,nowMs,mpl3115a2_period_ms);
 			phase_start=nowMs;
 			_measAlt=(_param.mode==mpl3115a2_altimeter_mode); // both mode: the pressure first
 			enter(mpl3115a2_initiate_one_shot_measurement,nowMs);

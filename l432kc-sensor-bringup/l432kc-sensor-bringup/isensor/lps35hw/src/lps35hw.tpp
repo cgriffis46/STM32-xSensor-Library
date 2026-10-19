@@ -140,7 +140,7 @@ void lps35hw<TTransport>::main(uint32_t nowMs){
 		if((nowMs-_lastStart)>=lps35hw_period_ms||(_force_measurement&&elapsed(nowMs,lps35hw_forced_ms))){
 			_force_measurement=false;
 			phase_start=nowMs;
-			_lastStart=nowMs;
+			this->nextPeriod(_lastStart,nowMs,lps35hw_period_ms);
 			if(_param.odr==lps35hw_odr_0hz){
 				enter(lps35hw_start_measurement_state,nowMs);
 			} else { // the chip is measuring by itself. read the latest

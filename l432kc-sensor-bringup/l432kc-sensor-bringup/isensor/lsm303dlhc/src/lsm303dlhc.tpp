@@ -81,7 +81,7 @@ void lsm303dlhc_accel<TTransport>::main(uint32_t nowMs){
 		if((nowMs-_lastStart)>=_param.period_ms||_start_measurement){
 			_start_measurement=false;
 			phase_start=nowMs;
-			_lastStart=nowMs;
+			this->nextPeriod(_lastStart,nowMs,_param.period_ms);
 			enter(lsm303dlhc_accel_status_state,nowMs);
 		} else {
 			// No longer than lsm303dlhc_request_poll_ms at a time, so a
@@ -233,7 +233,7 @@ void lsm303dlhc_mag<TTransport>::main(uint32_t nowMs){
 		// The period runs from the start of the last reading.
 		if((nowMs-_lastStart)>=_param.period_ms||_start_measurement){
 			_start_measurement=false;
-			_lastStart=nowMs;
+			this->nextPeriod(_lastStart,nowMs,_param.period_ms);
 			enter(lsm303dlhc_mag_read_state,nowMs);
 		} else {
 			const uint32_t left=_param.period_ms-(nowMs-_lastStart);

@@ -109,7 +109,7 @@ case Si7021_done_state:
 	} else if ((nowMs-_lastStart)>=Si7021_period_ms){
 		// The period runs from the start of the last measurement, so the
 		// conversions and the transfers don't add to it.
-		_lastStart=nowMs;
+		this->nextPeriod(_lastStart,nowMs,Si7021_period_ms);
 		enter(Si7021_start_humidity_measurement,nowMs);
 	} else {
 		// No longer than Si7021_request_poll_ms at a time, so a
