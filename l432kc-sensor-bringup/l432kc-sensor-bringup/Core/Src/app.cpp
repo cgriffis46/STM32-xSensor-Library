@@ -37,6 +37,10 @@
   *  SeaLevelBarometer (isensor/inc): the altimeter setting for the
   *  station's elevation, the sea-level figure a Davis console or
   *  weather.gov shows, with a calibration offset the console can set.
+  *  The MPL3115A2 also measures its own altitude each period (both
+  *  modes, one after the other) from the altimeter setting the console's
+  *  a command gives it: with weather.gov's, an estimate of the station's
+  *  elevation; until then 29.92 inHg (pressure altitude).
   *
   *  A debug log (Claude-iTransport's DebugLog.h, at ITRANSPORT_DEBUG 2, set
   *  in the project's defines) goes out on USART1 TX, D5 (PB6), at 921600
@@ -210,6 +214,7 @@ static void printHelp(void)
                "  e 131      the station's elevation in feet (e 40m for metres), for the sea-level readings\r\n"
                "  b 30.54    calibrate: make each barometer's sea-level reading this many inHg now\r\n"
                "  o          clear the calibration offsets\r\n"
+               "  a 30.36    the MPL3115A2's altimeter setting (its sea-level reference) in inHg, for its altitude\r\n"
                "  t 2026-10-19 14:05:00   set the DS1307's time (24 hour)\r\n"
                "  h          this help\r\n\r\n");
 }
@@ -281,6 +286,7 @@ public:
   virtual const Barometer *barometer() { return nullptr; }  // station pressure, Pa
   // Console commands that only some sensors take
   virtual bool setTime(const DS1307::ds1307_time_t &) { return false; }
+  virtual bool setAltimeterSetting(float pa) { (void) pa; return false; }   // sea-level reference, Pa
 };
 
 class Aht20 : public Sensor {
@@ -521,12 +527,15 @@ public:
   const Barometer *barometer() override { return &baro; }
 };
 
+// Both modes each period: the pressure (a barometer measurement), then the
+// chip's own altitude (an altimeter measurement) from the sea-level
+// reference the a command gives it; 29.92 inHg (pressure altitude) until then.
 class Mpl3115a2 : public Sensor {
   mpl3115a2::xmpl3115a2<I2C> d;
   ReadingBarometer baro;
   static mpl3115a2::mpl3115a2_param_t param() {
     mpl3115a2::mpl3115a2_param_t p;
-    p.mode = mpl3115a2::mpl3115a2_barometer_mode;
+    p.mode = mpl3115a2::mpl3115a2_both_mode;
     p.oversample_ratio = mpl3115a2::MPL3115A2_CTRL_REG1_OS32;
     return p;
   }
@@ -535,12 +544,21 @@ public:
   void step(uint32_t now) override { d.main(now); }
   bool reading(Line &l) override {
     if (!d.newData()) return false;
-    const float t = d.getTemp(), p = d.getPressure();   // degrees C, hPa
+    const float t = d.getTemp(), p = d.getPressure(), a = d.getAltitude();   // degrees C, hPa, m
     baro.pa = p * 100.0f;
     l.temperature(t);
     l.value("P", p, 2, " hPa");
+    l.value("alt", a, 1, " m");
+    char ref[16], ft[40];
+    formatFixed(ref, sizeof(ref), baro::paToInHg(d.seaLevelPressure()), 2);
+    if (isnan(a))
+      snprintf(ft, sizeof(ft), " at %s inHg", ref);
+    else
+      snprintf(ft, sizeof(ft), " (%ld ft) at %s inHg", lroundf(a / M_PER_FT), ref);
+    l.text(ft);
     return true;
   }
+  bool setAltimeterSetting(float pa) override { return d.setSeaLevelPressure(pa); }
   int state() override { return (int) d.state(); }
   uint32_t periodMs() const override { return mpl3115a2::mpl3115a2_period_ms; }
   const Barometer *barometer() override { return &baro; }
@@ -734,12 +752,15 @@ struct Running {
   uint32_t startTick = 0;
   bool reportedStale = false;              // sensorTask's, so a silent sensor is reported once
   uint32_t calSeen = 0, clearSeen = 0;     // the thread's
+  uint32_t altSeen = 0;
 };
 static Running g_running[MAX_SENSORS];
 static int g_nRunning = 0;
 static std::atomic<float> g_elevationM{STATION_ELEVATION_M};
 static std::atomic<float> g_calInHg{NAN};
 static std::atomic<uint32_t> g_calGen{0}, g_clearGen{0};
+static std::atomic<float> g_altInHg{NAN};  // the a command's altimeter setting
+static std::atomic<uint32_t> g_altGen{0};
 static std::atomic<bool> g_timeReq{false};
 static DS1307::ds1307_time_t g_time;      // valid while g_timeReq is set
 
@@ -775,6 +796,12 @@ static void sensorThread(void *arg)
     if (g_timeReq.load(std::memory_order_acquire) && s->setTime(g_time)) {
       g_timeReq.store(false, std::memory_order_release);
       consolePrint("%-9s time set\r\n", s->tag);
+    }
+    const uint32_t ag = g_altGen.load();
+    if (ag != r->altSeen) {
+      r->altSeen = ag;
+      if (s->setAltimeterSetting(baro::inHgToPa(g_altInHg.load())))
+        consolePrint("%-9s altimeter setting taken: its altitude from the next reading\r\n", s->tag);
     }
 
     Line l;
@@ -1252,6 +1279,19 @@ static void command(const char *cmd, bool *scanPending)
         g_calInHg.store(inHg);
         g_calGen.fetch_add(1);            // each barometer's thread calibrates and says so
       }
+    }
+  } else if (cmd[0] == 'a' && cmd[1] == ' ') {
+    const float inHg = strtof(cmd + 2, &end);
+    bool any = false;
+    for (int i = 0; i < g_nRunning; ++i)
+      if (strcmp(g_running[i].s->tag, "mpl3115a2") == 0) any = true;
+    if (end == cmd + 2 || !(inHg > 25.0f && inHg < 33.0f)) {
+      consolePrint("a <inHg>, the altimeter setting (e.g. weather.gov's), e.g. a 30.36\r\n");
+    } else if (!any) {
+      consolePrint("no MPL3115A2 running\r\n");
+    } else {
+      g_altInHg.store(inHg);
+      g_altGen.fetch_add(1);              // the MPL3115A2's thread takes it and says so
     }
   } else if (cmd[0] == 'o' && cmd[1] == 0) {
     g_clearGen.fetch_add(1);
