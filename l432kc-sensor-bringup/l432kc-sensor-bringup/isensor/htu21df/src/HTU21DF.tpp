@@ -18,6 +18,7 @@ HTU21DF<TTransport>::HTU21DF(TArgs&&... transportArgs)
   /* Assign default values to internal tracking variables. */
     _newData=false;
     _start_measure=false;
+    _lastStart=0;
   _humidity = NAN;
   _temp = NAN;
 }
@@ -55,19 +56,23 @@ void HTU21DF<TTransport>::main(uint32_t nowMs){
 		break;
 	case htu21df_reset_state:
 		if(elapsed(nowMs,htu21df_reset_ms)){ // wait 15ms for soft reset.
+			_lastStart=nowMs; // the first measurement a period from now
 			enter(htu21df_sleep_state,nowMs);
 		} else {
 			sleepRemaining(nowMs,htu21df_reset_ms);
 		}
 		break;
 	case htu21df_sleep_state:
-		if(_start_measure||elapsed(nowMs,htu21df_period_ms)){
+		// The period runs from the start of the last measurement, so the
+		// conversions and the transfers don't add to it.
+		if(_start_measure||(nowMs-_lastStart)>=htu21df_period_ms){
 			_start_measure=false;
+			_lastStart=nowMs;
 			enter(htu21df_measure_temp_state,nowMs);
 		} else {
 			// No longer than htu21df_request_poll_ms at a time, so a
 			// request is seen without waiting out the whole period.
-			uint32_t left=htu21df_period_ms-(nowMs-last_update);
+			uint32_t left=htu21df_period_ms-(nowMs-_lastStart);
 			sleep(left<htu21df_request_poll_ms?left:htu21df_request_poll_ms);
 		}
 		break;

@@ -29,8 +29,10 @@
  *  inherited from SensorStateMachine (isensor/inc), shared with the
  *  other drivers.
  *
- *  Measures once every aht20_period_ms, and at once when
- *  StartMeasurement() asks.
+ *  Measures once every aht20_period_ms, start to start (the conversion
+ *  and the transfers don't add to it), and at once when
+ *  StartMeasurement() asks. The first measurement comes a period after
+ *  start up.
  */
 
 #ifndef AHT20_H_
@@ -119,6 +121,7 @@ public:
 private:
 	uint8_t status_word;
 	uint32_t phase_start;	// when start up, or the current measurement, began
+	uint32_t _lastStart;	// when the last measurement started: the period runs from here
 	bool _start_measure;
 	bool _newData;
 	float _temp,_humidity;
