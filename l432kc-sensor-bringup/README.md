@@ -166,7 +166,8 @@ cell:
 
 The bottom row is the command line. Type a command (see "Commands") and press
 Enter; Backspace works. The arrow keys, and Enter or Backspace on an empty line,
-go to the GUI. Ctrl-L repaints everything (after reopening PuTTY, say). Until
+go to the GUI, which has nothing for them yet (Up and Down would scroll the
+cell if it had more labels than rows). Ctrl-L repaints everything (after reopening PuTTY, say). Until
 an MPL3115A2 is found the home screen says so, and the other sensors' readings
 are in the pane.
 
@@ -348,10 +349,13 @@ edit the copies here.
   * Earlier versions of this project ran the BME280, the BMP390 and the SHT31
     on the same board (2026-10-18), with the same drivers and settings.
   * The MPL3115A2 ran on 2026-10-19 (Saleae captures and the console), in
-    barometer and both modes, before the console became a GUI.
-  * The console's GUI has not run on the board or in PuTTY. It ran here on
-    iDisplay's VT100 model (what the terminal sends, replayed), with the
-    command-line handling and the home screen taken from `app.cpp`.
+    barometer and both modes.
+  * The console's GUI ran on the board in PuTTY on Windows on 2026-10-19:
+    the frame, the MPL3115A2's cell (inverse title, degree sign, values
+    matching the readings), the log pane, typed commands on the bottom row
+    with Backspace, and Ctrl-L. The arrow keys do nothing visible: the
+    home screen only scrolls the cell, whose five labels already fit, so
+    whether they arrive hasn't been seen.
   * Not yet run on a chip: HMC6352, DS1307, MMC56x3, LSM303DLHC,
     the BMP388, and the PM25 and DS18B20 options. Those drivers have run only
     in Claude-iTransport's host tests, against simulated chips.
