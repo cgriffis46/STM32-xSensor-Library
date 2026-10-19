@@ -1008,15 +1008,17 @@ static void busClearHalfBit(void)
   for (volatile uint32_t i = 0; i < n; ++i) {}
 }
 
-static int busClear(void)
-{
-  const uint32_t SCL = GPIO_PIN_9, SDA = GPIO_PIN_10;   // PA9, PA10 (I2C1 in the .ioc)
-  if (HAL_GPIO_ReadPin(GPIOA, SDA) == GPIO_PIN_SET)
-    return 0;                              // the bus is free: leave I2C1 alone
+static const uint32_t BUS_SCL = GPIO_PIN_9, BUS_SDA = GPIO_PIN_10;   // PA9, PA10 (I2C1 in the .ioc)
 
-  // Take the pins from I2C1: open drain outputs, released (high), so they
-  // can still be read.
-  HAL_I2C_DeInit(&hi2c1);
+// With I2C1 de-initialised: the pins as open drain GPIOs, SCL clocked until
+// SDA is free, a START and a STOP, then the pins handed back to I2C1 by
+// HAL_I2C_Init() (its MSP init sets their function again). Returns the
+// clocks it took; -1 SDA still low after BUS_CLEAR_MAX_CLOCKS; -2 SCL held
+// low, when clocking can't help.
+static int busClearPins(void)
+{
+  const uint32_t SCL = BUS_SCL, SDA = BUS_SDA;
+  // Open drain outputs, released (high), so they can still be read
   __HAL_RCC_GPIOA_CLK_ENABLE();
   HAL_GPIO_WritePin(GPIOA, SCL | SDA, GPIO_PIN_SET);
   GPIO_InitTypeDef g;
@@ -1041,7 +1043,7 @@ static int busClear(void)
       ++clocks;
     }
     result = HAL_GPIO_ReadPin(GPIOA, SDA) == GPIO_PIN_SET ? clocks : -1;
-    if (result > 0) {
+    if (result >= 0) {
       // A START, then a STOP, with SCL still high: every sensor drops what
       // it was doing. SCL isn't taken low first, or a sensor still sending
       // could put its next bit on SDA.
@@ -1052,11 +1054,136 @@ static int busClear(void)
     }
   }
 
-  // Back to I2C1: HAL_I2C_Init() calls the MSP init, which sets the pins
-  // to the I2C function again.
   if (HAL_I2C_Init(&hi2c1) != HAL_OK)
     Error_Handler();
   return result;
+}
+
+// At start: only if SDA is low. A free bus is only read.
+static int busClear(void)
+{
+  if (HAL_GPIO_ReadPin(GPIOA, BUS_SDA) == GPIO_PIN_SET)
+    return 0;                              // the bus is free: leave I2C1 alone
+  HAL_I2C_DeInit(&hi2c1);
+  return busClearPins();
+}
+
+// ---- I2C1 recovery at run time ----
+//
+// On the board, a sensor misbehaving in the middle of a transfer has left
+// I2C1 holding SCL low with its BUSY flag set, and every later transfer was
+// refused at once until a reset. sensorTask checks the bus every
+// BUS_CHECK_MS while holding the bus mutex (so no transfer of ours is in
+// flight, and an idle bus has SCL and SDA high and BUSY clear). If it isn't
+// idle, I2C1 is reset (its RCC reset too) and the bus cleared. The drivers
+// see their transfers fail and start again by themselves.
+//
+// If the mutex can't be had for BUS_STALL_MS, a transfer never ended (no
+// completion interrupt came): I2C1's interrupts are stopped and that
+// transfer is ended as failed, so its driver lets go of the mutex.
+//
+// After a recovery that didn't leave the bus idle, the next waits
+// BUS_RECOVER_BACKOFF_MS, doubling up to BUS_RECOVER_MAX_MS, so a dead chip
+// holding SDA is reported now and then, not every half second.
+
+static const uint32_t BUS_CHECK_MS = 500;
+static const uint32_t BUS_STALL_MS = 2000;
+static const uint32_t BUS_RECOVER_BACKOFF_MS = 5000;
+static const uint32_t BUS_RECOVER_MAX_MS = 80000;
+
+enum {                                     // why a recovery ran: app bus-recover's second value
+  BUS_WHY_BUSY = 1,                        // I2C1's BUSY flag set with nothing in flight
+  BUS_WHY_SCL = 2,                         // SCL low
+  BUS_WHY_SDA = 4,                         // SDA low
+  BUS_WHY_STALL = 8                        // a transfer that never ended
+};
+
+struct BusWatch {
+  uint32_t lastCheck = 0;
+  uint32_t lastFree = 0;                   // the last tick the mutex could be had
+  uint32_t lastRecover = 0;
+  uint32_t backoff = 0;                    // 0: none pending
+  uint32_t recoveries = 0;
+};
+static BusWatch g_bus;
+
+static int busNotIdle(void)
+{
+  int why = 0;
+  if (__HAL_I2C_GET_FLAG(&hi2c1, I2C_FLAG_BUSY)) why |= BUS_WHY_BUSY;
+  if (HAL_GPIO_ReadPin(GPIOA, BUS_SCL) == GPIO_PIN_RESET) why |= BUS_WHY_SCL;
+  if (HAL_GPIO_ReadPin(GPIOA, BUS_SDA) == GPIO_PIN_RESET) why |= BUS_WHY_SDA;
+  return why;
+}
+
+// With the bus mutex held
+static void busRecover(int why)
+{
+  HAL_I2C_DeInit(&hi2c1);
+  __HAL_RCC_I2C1_FORCE_RESET();
+  __HAL_RCC_I2C1_RELEASE_RESET();
+  const int r = busClearPins();
+  const int after = busNotIdle();
+  ++g_bus.recoveries;
+  DBG_FAULT("app", "bus-recover", (int32_t) r, (int32_t) why, (int32_t) after);
+  consolePrint("I2C1 recovered (#%lu):%s%s%s%s",
+               (unsigned long) g_bus.recoveries,
+               why & BUS_WHY_STALL ? " a transfer never ended;" : "",
+               why & BUS_WHY_BUSY ? " I2C1 busy;" : "",
+               why & BUS_WHY_SCL ? " SCL low;" : "",
+               why & BUS_WHY_SDA ? " SDA low;" : "");
+  if (r >= 0)
+    consolePrint(" %d clock(s), bus %s\r\n", r, after ? "still not free" : "free");
+  else
+    consolePrint(" %s still held low: check the wiring and power\r\n", r == -2 ? "SCL" : "SDA");
+  g_bus.backoff = after == 0 ? 0
+                : g_bus.backoff == 0 ? BUS_RECOVER_BACKOFF_MS
+                : (g_bus.backoff * 2 > BUS_RECOVER_MAX_MS ? BUS_RECOVER_MAX_MS : g_bus.backoff * 2);
+}
+
+// From sensorTask's loop: at most every BUS_CHECK_MS
+static void busWatch(uint32_t tick)
+{
+  if (tick - g_bus.lastCheck < BUS_CHECK_MS)
+    return;
+  g_bus.lastCheck = tick;
+  const bool waiting = g_bus.backoff != 0 && tick - g_bus.lastRecover < g_bus.backoff;
+
+  if (osMutexAcquire(i2c1_mutexHandle, 0) == osOK) {
+    g_bus.lastFree = tick;
+    const int why = busNotIdle();
+    if (why == 0) {
+      g_bus.backoff = 0;
+    } else if (!waiting) {
+      busRecover(why);
+      g_bus.lastRecover = osKernelGetTickCount();
+    }
+    osMutexRelease(i2c1_mutexHandle);
+    return;
+  }
+  if (tick - g_bus.lastFree < BUS_STALL_MS || waiting)
+    return;
+
+  // A transfer that never ended: end it as failed, with I2C1's interrupts
+  // off so the interrupt can't end it at the same time
+  HAL_NVIC_DisableIRQ(I2C1_EV_IRQn);
+  HAL_NVIC_DisableIRQ(I2C1_ER_IRQn);
+  const int why = BUS_WHY_STALL | busNotIdle();
+  HAL_I2C_DeInit(&hi2c1);
+  I2CTransport::onTransferComplete(&hi2c1, /*failed=*/true);
+  // Its driver lets go of the mutex when it next looks
+  if (osMutexAcquire(i2c1_mutexHandle, 1000) == osOK) {
+    busRecover(why);                       // HAL_I2C_Init() turns the interrupts on again
+    osMutexRelease(i2c1_mutexHandle);
+  } else {
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)    // try again next time
+      Error_Handler();
+    DBG_FAULT("app", "bus-stall", (int32_t) why);
+  }
+  g_bus.lastRecover = osKernelGetTickCount();
+  g_bus.lastFree = g_bus.lastRecover;
+  if (g_bus.backoff == 0)
+    g_bus.backoff = BUS_RECOVER_BACKOFF_MS;
 }
 
 // From main(), after the peripherals are set up and before the scheduler
@@ -1173,6 +1300,7 @@ void app_sensor_task(void *argument)
     consolePrint("I2C1: SCL held low at start: check the wiring and power\r\n");
   bool started[F_LSM303_M + 1];
   memset(started, 0, sizeof(started));
+  g_bus.lastCheck = g_bus.lastFree = osKernelGetTickCount();
 
 #if BRINGUP_USART1 == BRINGUP_USART1_PM25
   { static Pm25 s; start(s); }
@@ -1186,6 +1314,7 @@ void app_sensor_task(void *argument)
   while ((nHits = scanBus(hits, 16)) == 0 && g_nRunning == 0) {
     consolePrint("no sensor recognised on I2C1; scanning again in %lu s\r\n", (unsigned long)(SCAN_RETRY_MS / 1000));
     osDelay(SCAN_RETRY_MS);
+    busWatch(osKernelGetTickCount());      // a stuck bus would hide every sensor
   }
   for (int i = 0; i < nHits; ++i)
     startFound(hits[i], started);
@@ -1206,6 +1335,7 @@ void app_sensor_task(void *argument)
       scanPending = false;
       (void) scanBus(hits, 16);            // reports only: sensors start at the first scan
     }
+    busWatch(osKernelGetTickCount());
     // Once a second: a sensor with no reading for two periods and 2 s more
     // is reported once (and again after it has come back and gone again)
     const uint32_t tick = osKernelGetTickCount();
