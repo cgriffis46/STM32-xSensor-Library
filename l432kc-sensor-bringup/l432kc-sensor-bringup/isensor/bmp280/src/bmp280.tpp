@@ -123,7 +123,7 @@ void bmp280<TTransport>::main(uint32_t nowMs){
 			// conversion and the transfers don't add to it.
 			if((nowMs-_lastStart)>=bmp280_period_ms){
 				phase_start=nowMs;
-				_lastStart=nowMs;
+				this->nextPeriod(_lastStart,nowMs,bmp280_period_ms);
 				enter(bmp280_start_measurement,nowMs);
 			} else {
 				sleepRemaining(_lastStart,nowMs,bmp280_period_ms);

@@ -67,7 +67,7 @@ void HTU21DF<TTransport>::main(uint32_t nowMs){
 		// conversions and the transfers don't add to it.
 		if(_start_measure||(nowMs-_lastStart)>=htu21df_period_ms){
 			_start_measure=false;
-			_lastStart=nowMs;
+			this->nextPeriod(_lastStart,nowMs,htu21df_period_ms);
 			enter(htu21df_measure_temp_state,nowMs);
 		} else {
 			// No longer than htu21df_request_poll_ms at a time, so a
