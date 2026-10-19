@@ -115,6 +115,20 @@ start-up. The UART hears what it sends through the D4 link, as Claude-iTransport
    If SDA stays low after 9 clocks, or SCL itself is low, the console says
    to check the wiring and power. A sensor without its ground wire can do
    either.
+
+   The bus is also watched while the board runs. Every 0.5 s sensorTask takes
+   the bus mutex (so nothing is in flight) and checks the bus is idle: SCL
+   and SDA high, I2C1 not busy. A sensor that misbehaves in the middle of a
+   transfer can leave I2C1 holding SCL low and refusing every transfer until
+   a reset, as an MMC56x3 did. If the bus isn't idle, I2C1 is reset and the
+   bus cleared as at start, and the drivers start again by themselves:
+
+       I2C1 recovered (#1): I2C1 busy; SCL low; 0 clock(s), bus free
+
+   If the mutex can't be had for 2 s, a transfer never ended. Its driver is
+   told it failed, then the same recovery runs. If a recovery leaves the bus
+   still stuck (a dead chip holding SDA, say), the next one waits 5 s, then
+   10, 20, 40 and 80 s, until the bus is seen idle again.
 4. Each reading is printed as it comes, with a count at the end:
 
        sht31     T 24.97 C (76.9 F)  H 35.8 %RH | 12
@@ -169,6 +183,12 @@ C and C++ defines). The lines are:
 * `app bus-clear <n>`: SDA was low at start. A positive `n` is how many clocks
   freed it; -1 means it was still low after 9; -2 means SCL was held low.
   Nothing is logged when the bus was free.
+* `app bus-recover <n> <why> <after>`: I2C1 was reset while running. `n` as
+  for `bus-clear`; `why` adds 1 (I2C1 busy), 2 (SCL low), 4 (SDA low) and 8
+  (a transfer never ended); `after` is the same for the bus afterwards, 0 if
+  it is idle.
+* `app bus-stall <why>`: a transfer never ended, and its driver still held
+  the bus a second after being told it failed. Tried again later.
 * `app chip-id <address> <id 0x00> <id 0xD0>`: what the scan read at 0x76 and
   0x77.
 * `app sensor <address> <count>`: a sensor's thread started.
@@ -239,6 +259,10 @@ edit the copies here.
   scheduler and before the debug log is sent: the pins are open drain GPIOs
   for at most 9 clocks of at least 10 us each. A free bus is only read, never
   touched.
+* **The bus watch** (`busWatch()`, from sensorTask's loop and its scan
+  retries) checks only while holding the bus mutex, which each driver holds
+  from issuing a transfer until it lands. A recovery de-initialises I2C1,
+  pulses its RCC reset, runs the same clear, and starts it again.
 
 ## Not verified
 
@@ -264,6 +288,11 @@ edit the copies here.
   second flash is sometimes needed is a guess, not yet seen in a capture.
   The 9 clocks are from general knowledge of the I2C specification, not
   checked against it here.
+* **The bus watch** has run only on the PC, against a simulated I2C1 and
+  bus: I2C1 stuck holding SCL low, a sensor holding SDA mid-byte, a dead
+  chip holding SDA (and the backoff), a sensor holding SCL, a transfer that
+  never ends, and an idle bus left alone. On the board, nobody has yet seen
+  it bring I2C1 back.
 * **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
   warnings, in all three USART1 settings: about 108 KB flash at -Os (180 KB at
   -O0) of 256 KB, and 47 KB RAM of 64 KB, 32 KB of it the FreeRTOS heap.
