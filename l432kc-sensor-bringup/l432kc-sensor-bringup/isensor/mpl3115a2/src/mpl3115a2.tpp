@@ -26,6 +26,11 @@ mpl3115a2<TTransport>::mpl3115a2(const mpl3115a2_param_t &param, TArgs&&... tran
 	_irq_changed=false;
 	_who_am_i=0;
 	phase_start=0;
+	_lastStart=0;
+	_measAlt=false;
+	_bar_in=0;
+	_bar_in_changed=false;
+	_barInReg[0]=_barInReg[1]=0;
 	ctrl_reg1.reg=0;
 	ctrl_reg4.reg=0;
 	ctrl_reg5.reg=0;
@@ -60,6 +65,7 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 		}
 		break;
 	case mpl3115a2_reset_state:
+		_bar_in_changed=(_bar_in!=0); // the reset puts BAR_IN back to its default
 		ctrl_reg1.reg=0;
 		ctrl_reg1.bit.RST=1;
 		issued(this->writeReg(mpl3115a2_ctrl_reg1_addr,ctrl_reg1.reg),mpl3115a2_wait_reset_state,nowMs);
@@ -98,12 +104,13 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 		break;
 	case mpl3115a2_initializing_state:
 		ctrl_reg1.reg=0;
-		ctrl_reg1.bit.ALT=_param.mode;
+		ctrl_reg1.bit.ALT=(_param.mode==mpl3115a2_altimeter_mode)?1:0;
 		ctrl_reg1.bit.OS=_param.oversample_ratio;
 		issued(this->writeReg(mpl3115a2_ctrl_reg1_addr,ctrl_reg1.reg),mpl3115a2_wait_ctrl_reg1_state,nowMs);
 		break;
 	case mpl3115a2_wait_ctrl_reg1_state:
 		if(landed(nowMs)){
+			_lastStart=nowMs; // the first measurement a period from now
 			enter(mpl3115a2_pt_data_cfg_state,nowMs);
 		}
 		break;
@@ -142,13 +149,30 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 		}
 		break;
 	case mpl3115a2_done_state:
-		if(_irq_changed){ // SetIRQ() was called while running. The wait starts again afterwards
+		// The period runs from the start of the last measurement, so the
+		// conversions and transfers don't add to it.
+		if(_irq_changed){ // SetIRQ() was called while running
 			enter(mpl3115a2_ctrl_reg5_state,nowMs);
-		} else if(elapsed(nowMs,mpl3115a2_period_ms)){
+		} else if(_bar_in_changed){ // setSeaLevelPressure(), or a reset since
+			enter(mpl3115a2_bar_in_state,nowMs);
+		} else if((nowMs-_lastStart)>=mpl3115a2_period_ms){
+			_lastStart=nowMs;
 			phase_start=nowMs;
+			_measAlt=(_param.mode==mpl3115a2_altimeter_mode); // both mode: the pressure first
 			enter(mpl3115a2_initiate_one_shot_measurement,nowMs);
 		} else {
-			sleepRemaining(nowMs,mpl3115a2_period_ms);
+			sleep(mpl3115a2_period_ms-(nowMs-_lastStart));
+		}
+		break;
+	case mpl3115a2_bar_in_state:
+		_bar_in_changed=false; // a change from now on is written again
+		_barInReg[0]=(uint8_t)(_bar_in>>8);
+		_barInReg[1]=(uint8_t)(_bar_in&0xFF);
+		issued(this->writeRegs(mpl3115a2_bar_in_msb_addr,_barInReg,2),mpl3115a2_wait_bar_in_state,nowMs);
+		break;
+	case mpl3115a2_wait_bar_in_state:
+		if(landed(nowMs)){
+			enter(mpl3115a2_done_state,nowMs);
 		}
 		break;
 	case mpl3115a2_initiate_one_shot_measurement:
@@ -156,7 +180,8 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 		break;
 	case mpl3115a2_wait_ost_state:
 		if(landed(nowMs)){
-			if(ctrl_reg1.bit.OST==1){ // a measurement is already running
+			if(ctrl_reg1.bit.OST==1){ // a measurement is already running: take its result as what it is
+				_measAlt=(ctrl_reg1.bit.ALT==1);
 				enter(mpl3115a2_wait_one_shot_measurement,nowMs);
 			} else {
 				enter(mpl3115a2_write_ost_state,nowMs);
@@ -164,8 +189,21 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 		}
 		break;
 	case mpl3115a2_write_ost_state:
-		ctrl_reg1.bit.OST=1;
-		issued(this->writeReg(mpl3115a2_ctrl_reg1_addr,ctrl_reg1.reg),mpl3115a2_wait_write_ost_state,nowMs);
+		// A change of mode is written on its own first, in standby, then
+		// OST (as Adafruit's library does)
+		if(ctrl_reg1.bit.ALT!=(_measAlt?1:0)){
+			ctrl_reg1.bit.ALT=_measAlt?1:0;
+			ctrl_reg1.bit.OST=0;
+			issued(this->writeReg(mpl3115a2_ctrl_reg1_addr,ctrl_reg1.reg),mpl3115a2_write_alt_state,nowMs);
+		} else {
+			ctrl_reg1.bit.OST=1;
+			issued(this->writeReg(mpl3115a2_ctrl_reg1_addr,ctrl_reg1.reg),mpl3115a2_wait_write_ost_state,nowMs);
+		}
+		break;
+	case mpl3115a2_write_alt_state:
+		if(landed(nowMs)){
+			enter(mpl3115a2_write_ost_state,nowMs);
+		}
 		break;
 	case mpl3115a2_wait_write_ost_state:
 		if(landed(nowMs)){
@@ -199,8 +237,14 @@ void mpl3115a2<TTransport>::main(uint32_t nowMs){
 	case mpl3115a2_wait_conversion_state:
 		if(landed(nowMs)){
 			_getConversion();
-			_new_data=true;
-			enter(mpl3115a2_done_state,nowMs);
+			if(_param.mode==mpl3115a2_both_mode&&!_measAlt){ // now the altitude
+				_measAlt=true;
+				phase_start=nowMs;
+				enter(mpl3115a2_initiate_one_shot_measurement,nowMs);
+			} else {
+				_new_data=true;
+				enter(mpl3115a2_done_state,nowMs);
+			}
 		}
 		break;
 	case mpl3115a2_error_state:
@@ -220,18 +264,20 @@ bool mpl3115a2<TTransport>::phaseExpired(uint32_t nowMs) const{
 }
 
 // The same three bytes hold pressure in barometer mode and altitude
-// in altimeter mode, so only one of the two is ever valid.
+// in altimeter mode, so one measurement gives only one of them. In both
+// mode each keeps its own measurement's value.
 template <typename TTransport>
 void mpl3115a2<TTransport>::_getConversion(){
 	int16_t t;
 
-	if(_param.mode==mpl3115a2_altimeter_mode){
+	const bool both=(_param.mode==mpl3115a2_both_mode);
+	if(_measAlt){
 		// signed, metres, in 1/65536ths once left justified to 32 bits
 		int32_t alt;
 		alt = (int32_t)(uint32_t(dataReg[0]) << 24 | uint32_t(dataReg[1]) << 16 |
 			  uint32_t(dataReg[2]) << 8);
 		_altitude=float(alt) / 65536.0f;
-		_pressure=NAN;
+		if(!both) _pressure=NAN;
 	} else {
 		uint32_t pressure;
 		pressure=0;
@@ -239,7 +285,7 @@ void mpl3115a2<TTransport>::_getConversion(){
 		pressure|= (uint32_t(dataReg[1])<<8);
 		pressure|= (uint32_t(dataReg[2]));
 		_pressure=(float(pressure) / 6400.0f);
-		_altitude=NAN;
+		if(!both) _altitude=NAN;
 	}
 
 	t = (int16_t)((uint16_t(dataReg[3]) << 8) | (uint16_t(dataReg[4])));
@@ -267,6 +313,16 @@ template <typename TTransport>
 float mpl3115a2<TTransport>::getAltitude(){
 	_new_data=false;
 	return _altitude;
+}
+
+template <typename TTransport>
+bool mpl3115a2<TTransport>::setSeaLevelPressure(float pa){
+	if(!(pa>=2.0f&&pa<=131070.0f)){ // NAN too
+		return false;
+	}
+	_bar_in=(uint16_t)lroundf(pa/2.0f);
+	_bar_in_changed=true;
+	return true;
 }
 
 template <typename TTransport>
