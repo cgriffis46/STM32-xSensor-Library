@@ -19,6 +19,7 @@ Si7021<TTransport>::Si7021(const Si7021_param_t &param, TArgs&&... transportArgs
 	_updateTemp=false;
 	_updateHumidity=false;
 	_updateHeater=false;
+	_lastStart=0;
 	_enable_heater=param.enable;
 	_heater_current=param.heater_current;
 	_res=param.res;
@@ -90,6 +91,7 @@ case Si7021_write_heater_reg:
 	break;
 case Si7021_wait_write_heater_reg:
 	if(landed(nowMs)){
+		_lastStart=nowMs; // the next measurement a period from now
 		enter(Si7021_done_state,nowMs);
 	}
 	break;
@@ -99,15 +101,20 @@ case Si7021_done_state:
 		// The wait for the next measurement starts over.
 		enter(Si7021_initializing,nowMs);
 	} else if(_updateTemp){
+		_lastStart=nowMs;
 		enter(Si7021_start_temp_measurement,nowMs);
 	} else if (_updateHumidity){
+		_lastStart=nowMs;
 		enter(Si7021_start_humidity_measurement,nowMs);
-	} else if (elapsed(nowMs,Si7021_period_ms)){
+	} else if ((nowMs-_lastStart)>=Si7021_period_ms){
+		// The period runs from the start of the last measurement, so the
+		// conversions and the transfers don't add to it.
+		_lastStart=nowMs;
 		enter(Si7021_start_humidity_measurement,nowMs);
 	} else {
 		// No longer than Si7021_request_poll_ms at a time, so a
 		// request is seen without waiting out the whole period.
-		uint32_t left=Si7021_period_ms-(nowMs-last_update);
+		uint32_t left=Si7021_period_ms-(nowMs-_lastStart);
 		sleep(left<Si7021_request_poll_ms?left:Si7021_request_poll_ms);
 	}
 	break;

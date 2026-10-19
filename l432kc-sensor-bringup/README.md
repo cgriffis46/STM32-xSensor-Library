@@ -100,8 +100,9 @@ start-up. The UART hears what it sends through the D4 link, as Claude-iTransport
        2 sensors running
 
    The scan repeats every 2 s until something is recognised. Sensors are
-   started only by that first good scan, so connect them before reset; `s`
-   scans again later, but only reports.
+   started only by that first good scan, and I2C isn't hot-pluggable: connect
+   sensors with the board unplugged, then power up. `s` scans again later,
+   but only reports.
 4. Each reading is printed as it comes, with a count at the end:
 
        sht31     T 24.97 C (76.9 F)  H 35.8 %RH | 12

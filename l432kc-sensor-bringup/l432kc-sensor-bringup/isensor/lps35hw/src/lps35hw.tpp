@@ -24,6 +24,7 @@ lps35hw<TTransport>::lps35hw(const lps35hw_param_t &param, TArgs&&... transportA
 	_temp=NAN;
 	_who_am_i=0;
 	phase_start=0;
+	_lastStart=0;
 	_ctrl_reg1.reg=0;
 	_ctrl_reg2.reg=0;
 	_ctrl_reg3.reg=0;
@@ -128,13 +129,18 @@ void lps35hw<TTransport>::main(uint32_t nowMs){
 		break;
 	case lps35hw_wait_fifo_ctrl_state:
 		if(landed(nowMs)){
+			_lastStart=nowMs; // the first measurement a period from now
 			enter(lps35hw_done_state,nowMs);
 		}
 		break;
 	case lps35hw_done_state:
-		if(elapsed(nowMs,lps35hw_period_ms)||(_force_measurement&&elapsed(nowMs,lps35hw_forced_ms))){
+		// The period runs from the start of the last measurement, so the
+		// conversion and the transfers don't add to it. A request still
+		// waits lps35hw_forced_ms after the last reading.
+		if((nowMs-_lastStart)>=lps35hw_period_ms||(_force_measurement&&elapsed(nowMs,lps35hw_forced_ms))){
 			_force_measurement=false;
 			phase_start=nowMs;
+			_lastStart=nowMs;
 			if(_param.odr==lps35hw_odr_0hz){
 				enter(lps35hw_start_measurement_state,nowMs);
 			} else { // the chip is measuring by itself. read the latest
@@ -144,8 +150,7 @@ void lps35hw<TTransport>::main(uint32_t nowMs){
 			// No longer than lps35hw_forced_ms at a time, so a
 			// startMeasurement() request is seen without waiting out
 			// the whole period.
-			uint32_t waited=nowMs-last_update;
-			uint32_t left=lps35hw_period_ms-waited;
+			uint32_t left=lps35hw_period_ms-(nowMs-_lastStart);
 			sleep(left<lps35hw_forced_ms?left:lps35hw_forced_ms);
 		}
 		break;
