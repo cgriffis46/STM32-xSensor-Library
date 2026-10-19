@@ -11,6 +11,7 @@ the ones it uses, recorded in its `iTransport/SOURCE.txt`.
 | [`l432kc-sensor-bringup/`](l432kc-sensor-bringup/README.md) | NUCLEO-L432KC | Plug in any supported I2C sensor, reset, and read it. 14 kinds of chip are recognised by address and ID: AHT20, BME280, BME680, BMP280, BMP390, DS1307, HMC6352, HTU21D, LPS35HW, LSM303DLHC, MMC56x3, MPL3115A2, SHT31 and Si7021. A PMS5003 or a DS18B20 is a build option. |
 | [`gps-clock-f207/`](gps-clock-f207/README.md) | NUCLEO-F207ZG + X-NUCLEO-GNSS2A1 | GPS clock and NTP server on the board's own Ethernet |
 | [`gps-clock-f405/`](gps-clock-f405/README.md) | Adafruit Feather STM32F405 | GPS clock and NTP server on a W5500, with an OLED |
+| [`STM32L476RG_MC2515_Example/`](STM32L476RG_MC2515_Example/README.md) | NUCLEO-L476RG + SparkFun CAN-BUS shield | Sends the shield's joystick over CAN (MCP2515, 500 kbit/s), for an L432KC with an OLED to show |
 
 ## The old examples
 

@@ -1,0 +1,17 @@
+Vendored from https://github.com/cgriffis46/Claude-iTransport
+commit 7038b10 (main, 2026-10-19; MIT, see iTransport/LICENSE), by
+../sync_from_claude_itransport.sh. Copied unchanged:
+
+  iTransport/inc, src            <- iTransport/itransport/inc, src
+                                    (BusTransport.h DebugLog.h ISensorTransport.h OneWireUartTransport.h SPITransport.h SpiBlockTransport.h iBlockTransport.h iClock.h iTransport.h iTransportOneWire.h
+                                     BusTransport.cpp DebugLog.cpp OneWireUartTransport.cpp SpiBlockTransport.cpp)
+  iTransport/hw/freertos/inc     <- iTransport/itransport/hw/freertos/inc (FreeRtosTransport.h)
+  iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
+                                    (Stm32DebugPort.h Stm32HalSpiBlockTransport.h Stm32HalUartTransport.h
+                                     Stm32HalSpiBlockTransport.cpp Stm32HalUartTransport.cpp Stm32SpiItCallbacks.cpp Stm32UartItCallbacks.cpp)
+  isensor/inc                    <- isensor/inc (SensorStateMachine.h)
+  iCan/inc                       <- iCan/inc (iCan.h)
+  iCan/mcp2515/inc, src          <- iCan/mcp2515/inc, src
+
+To update: run the script again against a newer Claude-iTransport checkout.
+Fix bugs in Claude-iTransport, not here.
