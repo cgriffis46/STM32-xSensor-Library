@@ -55,17 +55,26 @@
  *  left as it is by writing 1, so a status write never clears a flag it
  *  doesn't mean to, even one set since the last read.
  *
- *  Temperature: the chip converts every 64 s by itself (0.25 C steps).
+ *  Temperature: the chip converts every 64 s by itself (0.25 C steps,
+ *  10 bit two's complement; 0 C after power-on until the first).
  *  getTemperature() is the last conversion, NAN until the first read.
- *  The aging offset (setAging(), -128..127, about 0.1 ppm a step, plus
- *  slows the clock) is applied at the next conversion; the driver asks
- *  for one (CONV) after writing it, unless one is already running (BSY).
+ *  The aging offset (setAging(), -128..127, about 0.1 ppm a step at 25 C,
+ *  plus slows the clock) is applied by a conversion; the driver starts
+ *  one (CONV) after writing it, or, while one is running (BSY or CONV:
+ *  BSY rises only about 2 ms after CONV is set), as soon as a read shows
+ *  it finished. A CONV written during a conversion would not start one.
  *
- *  The register map, the alarm mask bits, the status flag rules, CONV
- *  and BSY, the aging step and the reset values are general knowledge
- *  (and Adafruit's RTClib and Linux's rtc-ds1307.c agree), NOT YET
- *  CHECKED against the DS3231 datasheet. The DS3231 is a 400 kHz part.
- *  Not yet run against a chip.
+ *  Checked against Maxim's DS3231 datasheet (19-5170, Rev 10, 3/15): the
+ *  address (1101000), the register map and its wrap from 12h to 00h, the
+ *  time registers latched on START, the alarm mask table (Table 2), the
+ *  control and status bits and power-on values (0x1C, 0x88), A1F/A2F
+ *  written 1 left unchanged, OSF held until written 0, CONV and BSY, the
+ *  aging offset's sign and step, the temperature format. The datasheet
+ *  doesn't say what writing 1 to OSF does; it is written 1 (unchanged,
+ *  presumably) except to clear it, the safe way round. On first power the
+ *  time reads 2000-01-01 00:00:00, day 1; the alarm registers have no
+ *  power-on value (the driver disables both at start-up). The DS3231 is a
+ *  400 kHz part. Not yet run against a chip.
  */
 
 #ifndef DS3231_H_
@@ -130,8 +139,10 @@ const uint8_t DS3231_STAT_BSY = 0x04;		// a temperature conversion is running
 const uint8_t DS3231_STAT_A2F = 0x02;
 const uint8_t DS3231_STAT_A1F = 0x01;
 
-// The INT/SQW pin. Off: it is the alarm interrupt (INTCN 1). The rest
-// are square waves (INTCN 0; RS2..RS1), and the alarms are only polled.
+// The INT/SQW pin (open drain). Off: it is the alarm interrupt (INTCN 1,
+// the power-on state). The rest are square waves (INTCN 0; RS2..RS1), and
+// the alarms are only polled. The 1 Hz wave rises 500 ms after the seconds
+// are written.
 enum class ds3231_sqw_t : uint8_t {
 	Off,
 	Hz1,
@@ -168,7 +179,7 @@ const uint32_t ds3231_request_poll_ms = 100;	// longest sleep, so requests are s
 struct ds3231_param_t {
 	uint32_t period_ms;		// between reads, start to start
 	ds3231_sqw_t sqw;		// the INT/SQW pin
-	bool sqwOnBattery;		// BBSQW: the square wave (or the alarm interrupt) on battery too
+	bool sqwOnBattery;		// BBSQW: the square wave on battery too (with sqw not Off); else the pin is high impedance on battery
 	bool out32kHz;			// EN32kHz: the 32kHz pin's output (the chip starts with it on)
 
 	ds3231_param_t() : period_ms(1000), sqw(ds3231_sqw_t::Off), sqwOnBattery(false), out32kHz(false) {}
@@ -295,7 +306,8 @@ private:
 	bool _haveTime;
 	bool _haveRegs;
 	bool _osf;
-	bool _busy;						// BSY at the last read
+	bool _busy;						// a conversion running: BSY or CONV at the last read, or CONV just written
+	bool _convWanted;				// a conversion to start once none is running (after an aging change)
 	bool _newData;
 	bool _readNow;
 	uint8_t _pending;				// Op bits
