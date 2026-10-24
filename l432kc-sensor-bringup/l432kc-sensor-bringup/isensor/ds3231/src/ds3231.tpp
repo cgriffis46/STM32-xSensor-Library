@@ -16,7 +16,8 @@ namespace DS3231 {
 // ---- helpers ----
 
 // Alarm mask bits (bit 7 of each alarm register) and DY/DT (bit 6 of the
-// day/date register), general knowledge:
+// day/date register), the datasheet's Table 2 (configurations it doesn't
+// list are never written):
 //   alarm 1 (A1M1..A1M4): 1111 every second, 1110 seconds, 1100 minutes and
 //     seconds, 1000 hours..., 0000 day/date...
 //   alarm 2 (A2M2..A2M4): 111 every minute (at :00), 110 minutes, 100
@@ -69,7 +70,7 @@ template <typename... TArgs>
 ds3231<TTransport>::ds3231(const ds3231_param_t& param, TArgs&&... transportArgs)
 	: base(ds3231_init_state, ds3231_err_state, ds3231_bus_timeout_ms, std::forward<TArgs>(transportArgs)...),
 	  _param(param), _lastRead(0), _outAddr(0), _outOp(0), _time(), _temperature(NAN), _aging(0),
-	  _agingWanted(0), _haveTime(false), _haveRegs(false), _osf(true), _busy(false), _newData(false),
+	  _agingWanted(0), _haveTime(false), _haveRegs(false), _osf(true), _busy(false), _convWanted(false), _newData(false),
 	  _readNow(true), _pending(0), _clearFlags(0), _setStatus(ds3231_set_status_t::None), _reconfigs(0) {
 	for (uint8_t i = 0; i < ds3231_reg_count; ++i) _regs[i] = 0;
 	for (uint8_t i = 0; i < 7; ++i) { _setRegs[i] = 0; _out[i] = 0; }
@@ -205,6 +206,10 @@ void ds3231<TTransport>::main(uint32_t nowMs) {
 		if (started) {
 			_pending &= (uint8_t)~_outOp;
 			if (_outOp == OpStatus) _clearFlags = 0;
+			if (_outOp == OpConvert) {
+				_convWanted = false;
+				_busy = true;			// until a read shows CONV and BSY both clear
+			}
 		}
 		issued(started, ds3231_wait_write_state, nowMs);
 		break;
@@ -215,8 +220,11 @@ void ds3231<TTransport>::main(uint32_t nowMs) {
 			if (_outOp == OpTime) {
 				if (!(_pending & OpTime)) _setStatus = ds3231_set_status_t::Done;
 				_readNow = true;			// read it back at once
-			} else if (_outOp == OpAging && !_busy) {
-				_pending |= OpConvert;		// apply it now, not at the next 64 s conversion
+			} else if (_outOp == OpAging) {
+				// Applied by a conversion: one now (not at the next 64 s), or,
+				// while one is running, once a read shows it finished.
+				_convWanted = true;
+				if (!_busy) _pending |= OpConvert;
 			}
 			enter(ds3231_done_state, nowMs);
 		}
@@ -255,7 +263,11 @@ bool ds3231<TTransport>::decode() {
 	const uint8_t status = r[ds3231_status_addr];
 	_haveRegs = true;
 	_osf = (status & DS3231_STAT_OSF) != 0;
-	_busy = (status & DS3231_STAT_BSY) != 0;
+	// A conversion runs while BSY or CONV is set: CONV stays 1 until a
+	// conversion it started is done, while BSY only rises about 2 ms after
+	// (datasheet, control register bit 5).
+	_busy = (status & DS3231_STAT_BSY) != 0 || (r[ds3231_control_addr] & DS3231_CTRL_CONV) != 0;
+	if (_convWanted && !_busy) _pending |= OpConvert;
 	_aging = (int8_t)r[ds3231_aging_addr];
 	_temperature = (float)(int8_t)r[ds3231_temp_msb_addr] + (float)(r[ds3231_temp_lsb_addr] >> 6) * 0.25f;
 

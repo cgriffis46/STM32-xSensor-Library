@@ -47,6 +47,21 @@
  *  the reading. Bosch's BSEC library (IAQ, CO2 equivalent) is not
  *  part of this: it is closed source, and takes these raw readings.
  *
+ *  isensor's interfaces (isensor/inc): Barometer, Thermometer,
+ *  Hygrometer and Altimeter, so a SeaLevelBarometer can wrap it:
+ *
+ *      bme680<Stm32HalI2CTransport> bme(param, &hi2c1, BME680_I2C_ADDR_HIGH, i2c1Mutex);
+ *      SeaLevelBarometer baro(bme, 33.0f);     // 33 m above sea level
+ *
+ *  The altitude is worked out from the pressure and a sea-level
+ *  reference (setSeaLevelPressure(), 101325 Pa until then: pressure
+ *  altitude) with the standard atmosphere's formula, as BMP280Sensor
+ *  does. A SeaLevelBarometer's getPressure() (the altimeter setting) can
+ *  be the reference, but the altitude then comes out about 2.5 m below
+ *  the elevation the SeaLevelBarometer was given (107.5 m for 110 m at
+ *  100 kPa, in bme680_test): NOAA's altimeter setting carries a 0.3 hPa
+ *  station correction and its own constants.
+ *
  *  Not done: the BME688's parallel and sequential modes (heater
  *  profiles of up to 10 steps), the 3-wire SPI mode and the self test.
  *
@@ -70,6 +85,10 @@
 #include <utility>
 #include "ISensorTransport.h"
 #include "SensorStateMachine.h"
+#include "Barometer.h"
+#include "Thermometer.h"
+#include "Hygrometer.h"
+#include "Altimeter.h"
 
 namespace BME680 {
 
@@ -196,6 +215,8 @@ const uint32_t bme680_phase_margin_ms = 100;	// a measurement fails this long af
 const uint32_t bme680_request_poll_ms = 100;	// longest sleep while a startMeasurement() could arrive
 const uint32_t bme680_error_backoff_ms = 100;	// in bme680_error_state before starting again
 
+const float bme680_sea_level_default_pa = 101325.0f;	// the standard atmosphere's
+
 const uint16_t bme680_heater_max_c = 400;		// Bosch caps the set-point here
 const uint16_t bme680_heater_max_ms = 4032;		// gas_wait's longest (63 x 64)
 
@@ -260,7 +281,8 @@ inline uint32_t bme680_gas_wait_ms(uint8_t gas_wait);		// what the chip waits fo
 inline uint32_t bme680_meas_us(uint8_t os_t, uint8_t os_p, uint8_t os_h);	// Bosch's bme68x_get_meas_dur, forced mode
 
 template <typename TTransport>
-class bme680 : public SensorStateMachine<TTransport, bme680_state_t> {
+class bme680 : public SensorStateMachine<TTransport, bme680_state_t>,
+               public Barometer, public Thermometer, public Hygrometer, public Altimeter {
 	static_assert(std::is_base_of<ISensorTransport, TTransport>::value,
 			"bme680<TTransport>: TTransport must derive from ISensorTransport");
 	typedef SensorStateMachine<TTransport, bme680_state_t> base;
@@ -291,6 +313,19 @@ public:
 	// after a failure. Clears newData().
 	void getReading(bme680_reading_t *r);
 
+	// The same readings through isensor's interfaces (isensor/inc). NAN
+	// until the first reading and after a failure; they leave newData()
+	// alone.
+	float getPressure() const override { return _reading.pressure; }			// Pa
+	float getTemperature() const override { return _reading.temperature; }		// degrees C
+	float getHumidity() const override { return _reading.humidity; }			// %RH
+	float getAltitude() const override;										// m, from the pressure
+
+	// The sea-level pressure the altitude is reckoned from, Pa. false,
+	// and unchanged, unless it is a positive number.
+	bool setSeaLevelPressure(float pa);
+	float seaLevelPressure() const { return _seaLevelPa; }
+
 	bme680_variant_t variant() const { return _variant; }
 
 	// How long one measurement takes with this configuration, heater
@@ -308,6 +343,8 @@ private:
 	bool _newData;
 	bool _start_measurement;
 	uint32_t phase_start;		// when the current measurement began
+	uint32_t _lastStart;		// when the current period began (nextPeriod())
+	float _seaLevelPa;
 	uint8_t _page;				// SPI: BME680_MEM_PAGE_BIT or 0, 0xFF when not known
 	uint8_t _pageWant;
 	bme680_state_t _pageReturn;

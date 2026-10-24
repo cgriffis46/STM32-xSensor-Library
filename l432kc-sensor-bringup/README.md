@@ -52,8 +52,8 @@ Notes on recognising the chips:
   it tries again (three tries, 600 ms apart). Anything else is a DS1307.
   Checked here against simulated chips: every instant of a minute, and
   100,000 DS1307s with random RAM and 60 with RAM of zeros (none taken for a
-  DS3231). The pointer's wrap is general knowledge, not yet checked against
-  the datasheet or a chip.
+  DS3231). The wrap, the zero bits and the temperature format are as Maxim's
+  DS3231 datasheet (19-5170 Rev 10) gives them; not yet tried on a chip.
 * **Only the first of each kind is driven.** A second BME280 at the other
   address is reported, not started.
 * **The Bosch chips** (BME280, BMP280, BME680, BMP390) share 0x76 and 0x77:

@@ -1060,8 +1060,9 @@ static bool readReg(uint8_t addr, uint8_t reg, uint8_t *v, uint16_t n = 1)
 // wraps from 0x12 to the seconds, where a DS1307 has RAM at 0x13: two bytes
 // read from 0x12 end with the seconds, read just before or after (they may
 // tick between). Seconds of 00 can't tell a zeroed RAM from a DS3231, so
-// that is tried again. Anything else is a DS1307, as before. (The wrap is
-// general knowledge, not yet checked against the datasheet.)
+// that is tried again. Anything else is a DS1307, as before. (The wrap from
+// 12h to 00h, the zero bits and the temperature format are in Maxim's
+// DS3231 datasheet, 19-5170 Rev 10.)
 static bool isDs3231(void)
 {
   for (int tries = 0; tries < 3; ++tries) {
