@@ -13,75 +13,12 @@
 
 namespace DS1307 {
 
-// ---- date helpers ----
+// ---- date helpers: RtcDate.h's ----
 
-// Days since 1970-01-01 of a date in the proleptic Gregorian calendar
-// (Howard Hinnant's days_from_civil; general knowledge, checked by the
-// test against known dates).
-inline int32_t ds1307DaysFromCivil(int32_t y, uint32_t m, uint32_t d) {
-	y -= m <= 2;
-	const int32_t era = (y >= 0 ? y : y - 399) / 400;
-	const uint32_t yoe = (uint32_t)(y - era * 400);
-	const uint32_t doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
-	const uint32_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-	return era * 146097 + (int32_t)doe - 719468;
-}
-
-inline uint8_t ds1307DaysInMonth(uint16_t year, uint8_t month) {
-	static const uint8_t days[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-	if (month == 2 && (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)) return 29;
-	return days[month - 1];
-}
-
-inline uint8_t ds1307_weekday(uint16_t year, uint8_t month, uint8_t day) {
-	// 1970-01-01 was a Thursday (4).
-	return (uint8_t)((ds1307DaysFromCivil(year, month, day) + 4) % 7);
-}
-
-inline bool ds1307_valid(const ds1307_time_t& t) {
-	return t.year >= 2000 && t.year <= 2099
-		&& t.month >= 1 && t.month <= 12
-		&& t.day >= 1 && t.day <= ds1307DaysInMonth(t.year, t.month)
-		&& t.hour <= 23 && t.minute <= 59 && t.second <= 59;
-}
-
-inline uint32_t ds1307_to_unix(const ds1307_time_t& t) {
-	const uint32_t days = (uint32_t)ds1307DaysFromCivil(t.year, t.month, t.day);
-	return days * 86400u + t.hour * 3600u + t.minute * 60u + t.second;
-}
-
-inline void ds1307_from_unix(uint32_t s, ds1307_time_t* t) {
-	const uint32_t days = s / 86400u;
-	const uint32_t secs = s % 86400u;
-	t->hour = (uint8_t)(secs / 3600u);
-	t->minute = (uint8_t)(secs / 60u % 60u);
-	t->second = (uint8_t)(secs % 60u);
-	t->weekday = (uint8_t)((days + 4) % 7);
-	// civil_from_days (Howard Hinnant), for days >= 0
-	const uint32_t z = days + 719468;
-	const uint32_t era = z / 146097;
-	const uint32_t doe = z - era * 146097;
-	const uint32_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-	const uint32_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-	const uint32_t mp = (5 * doy + 2) / 153;
-	const uint32_t d = doy - (153 * mp + 2) / 5 + 1;
-	const uint32_t m = mp < 10 ? mp + 3 : mp - 9;
-	const uint32_t y = yoe + era * 400 + (m <= 2);
-	t->year = (uint16_t)(y > 0xFFFF ? 0xFFFF : y);
-	t->month = (uint8_t)m;
-	t->day = (uint8_t)d;
-}
-
-// BCD, refusing a nibble above 9 (a chip that was never set, or a bad read).
-inline bool ds1307Bcd(uint8_t v, uint8_t* out) {
-	if ((v & 0x0F) > 9 || (v >> 4) > 9) return false;
-	*out = (uint8_t)((v >> 4) * 10 + (v & 0x0F));
-	return true;
-}
-
-inline uint8_t ds1307ToBcd(uint8_t v) {
-	return (uint8_t)(((v / 10) << 4) | (v % 10));
-}
+inline uint8_t ds1307_weekday(uint16_t year, uint8_t month, uint8_t day) { return rtc::weekday(year, month, day); }
+inline bool ds1307_valid(const ds1307_time_t& t) { return rtc::valid(t); }
+inline uint32_t ds1307_to_unix(const ds1307_time_t& t) { return rtc::toUnix(t); }
+inline void ds1307_from_unix(uint32_t s, ds1307_time_t* t) { rtc::fromUnix(s, t); }
 
 // ---- ds1307 ----
 
@@ -230,18 +167,11 @@ void ds1307<TTransport>::onFail() {
 template <typename TTransport>
 bool ds1307<TTransport>::decode() {
 	ds1307_time_t t;
-	uint8_t year, hour;
-	if (!ds1307Bcd(_regs[0] & 0x7F, &t.second) || !ds1307Bcd(_regs[1] & 0x7F, &t.minute)
-			|| !ds1307Bcd(_regs[4] & 0x3F, &t.day) || !ds1307Bcd(_regs[5] & 0x1F, &t.month)
-			|| !ds1307Bcd(_regs[6], &year)) {
+	uint8_t year;
+	if (!rtc::fromBcd(_regs[0] & 0x7F, &t.second) || !rtc::fromBcd(_regs[1] & 0x7F, &t.minute)
+			|| !rtc::fromBcd(_regs[4] & 0x3F, &t.day) || !rtc::fromBcd(_regs[5] & 0x1F, &t.month)
+			|| !rtc::fromBcd(_regs[6], &year) || !rtc::hoursFromReg(_regs[2], &t.hour)) {
 		return false;
-	}
-	if (_regs[2] & 0x40) {
-		// 12 hour mode: 1..12, bit 5 PM. 12 AM is 0, 12 PM is 12.
-		if (!ds1307Bcd(_regs[2] & 0x1F, &hour) || hour < 1 || hour > 12) return false;
-		t.hour = (uint8_t)(hour % 12 + ((_regs[2] & 0x20) ? 12 : 0));
-	} else {
-		if (!ds1307Bcd(_regs[2] & 0x3F, &t.hour)) return false;
 	}
 	t.year = (uint16_t)(2000 + year);
 	if (!ds1307_valid(t)) return false;
@@ -253,13 +183,13 @@ bool ds1307<TTransport>::decode() {
 
 template <typename TTransport>
 void ds1307<TTransport>::encode(const ds1307_time_t& t, uint8_t* out) const {
-	out[0] = ds1307ToBcd(t.second);		// CH clear: the oscillator runs
-	out[1] = ds1307ToBcd(t.minute);
-	out[2] = ds1307ToBcd(t.hour);		// bit 6 clear: 24 hour mode
+	out[0] = rtc::toBcd(t.second);		// CH clear: the oscillator runs
+	out[1] = rtc::toBcd(t.minute);
+	out[2] = rtc::toBcd(t.hour);		// bit 6 clear: 24 hour mode
 	out[3] = (uint8_t)(ds1307_weekday(t.year, t.month, t.day) + 1);	// 1 Sunday .. 7 Saturday
-	out[4] = ds1307ToBcd(t.day);
-	out[5] = ds1307ToBcd(t.month);
-	out[6] = ds1307ToBcd((uint8_t)(t.year - 2000));
+	out[4] = rtc::toBcd(t.day);
+	out[5] = rtc::toBcd(t.month);
+	out[6] = rtc::toBcd((uint8_t)(t.year - 2000));
 }
 
 template <typename TTransport>

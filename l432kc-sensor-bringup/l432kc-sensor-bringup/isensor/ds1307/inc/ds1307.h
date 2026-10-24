@@ -55,6 +55,7 @@
 #include <utility>
 #include "ISensorTransport.h"
 #include "SensorStateMachine.h"
+#include "RtcDate.h"
 
 namespace DS1307 {
 
@@ -103,12 +104,8 @@ enum class ds1307_sqw_t : uint8_t {
 
 // A date and time, 24 hour. year 2000..2099. weekday 0 Sunday .. 6
 // Saturday (setTime() works it out; the one passed in is ignored).
-struct ds1307_time_t {
-	uint16_t year;
-	uint8_t month, day;
-	uint8_t hour, minute, second;
-	uint8_t weekday;
-};
+// RtcDate.h's, shared with the DS3231.
+typedef rtc::rtc_time_t ds1307_time_t;
 
 // All times in ms.
 const uint32_t ds1307_bus_timeout_ms = 100;		// one transfer, to issue or to land
@@ -133,7 +130,7 @@ enum class ds1307_set_status_t : uint8_t {
 	Failed		// the write failed; not retried (the time would be stale): call setTime() again
 };
 
-// ---- date helpers, usable on their own ----
+// ---- date helpers, usable on their own (RtcDate.h's, by their old names) ----
 
 // 0 Sunday .. 6 Saturday, for 2000-01-01 onwards.
 inline uint8_t ds1307_weekday(uint16_t year, uint8_t month, uint8_t day);
