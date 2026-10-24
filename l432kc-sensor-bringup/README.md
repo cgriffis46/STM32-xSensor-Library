@@ -31,7 +31,8 @@ its history, tagged `legacy-2026-10`.
 | 0x44 / 0x45 | SHT31 | answers | `SHT31` (periodic) | 1 s |
 | 0x5C / 0x5D | LPS35HW | WHO_AM_I 0xB1 in 0x0F | `lps35hw` | 1 s |
 | 0x60 | MPL3115A2 | WHO_AM_I 0xC4 in 0x0C | `mpl3115a2` (both modes: pressure, then altitude) | 5 s |
-| 0x68 | DS1307 | answers | `ds1307` | 1 s |
+| 0x68 | DS3231 | registers 0x0E..0x12 as only a DS3231 has them, and the register pointer wrapping from 0x12 to the seconds (read only) | `ds3231` (time, temperature, aging offset) | 1 s |
+| 0x68 | DS1307 | answers, and isn't a DS3231 | `ds1307` | 1 s |
 | 0x76 / 0x77 | BME280 | 0x60 in 0xD0 | `bme280` (forced) | ~0.25 s |
 | 0x76 / 0x77 | BMP280 | 0x58 in 0xD0 | `bmp280` (forced) | 1 s |
 | 0x76 / 0x77 | BME680 / BME688 | 0x61 in 0xD0 | `bme680` (gas heater 320 C, 150 ms) | 3 s |
@@ -42,8 +43,17 @@ its history, tagged `legacy-2026-10`.
 Notes on recognising the chips:
 
 * **"Answers"** means the chip has no ID to check. Any chip at that address
-  is taken to be it: a DS3231 or an MPU-6050 at 0x68 would be driven as a
-  DS1307.
+  is taken to be it: an MPU-6050 at 0x68 would be driven as a DS1307.
+* **DS3231 or DS1307** (both at 0x68): the scan only reads. A DS3231's
+  status, temperature and control registers (0x0E..0x12) have bits only it
+  holds at 0 and a temperature of -40..85 C; and its register pointer wraps
+  from 0x12 to the seconds, where a DS1307 has RAM, so two bytes read from
+  0x12 end with the seconds. At :00 that can't be told from RAM of zeros, so
+  it tries again (three tries, 600 ms apart). Anything else is a DS1307.
+  Checked here against simulated chips: every instant of a minute, and
+  100,000 DS1307s with random RAM and 60 with RAM of zeros (none taken for a
+  DS3231). The pointer's wrap is general knowledge, not yet checked against
+  the datasheet or a chip.
 * **Only the first of each kind is driven.** A second BME280 at the other
   address is reported, not started.
 * **The Bosch chips** (BME280, BMP280, BME680, BMP390) share 0x76 and 0x77:
@@ -225,7 +235,8 @@ offset doesn't change the altitude (the chip only sees its own pressure).
 | `b 30.54` | calibrate each barometer's sea-level reading to this many inHg now |
 | `o` | clear the calibration offsets |
 | `a 30.36` | the MPL3115A2's altimeter setting (its sea-level reference), for its altitude |
-| `t 2026-10-19 14:05:00` | set the DS1307's time (24 hour); this also starts a stopped oscillator |
+| `t 2026-10-19 14:05:00` | set the RTC's time (24 hour): a DS1307's oscillator starts; a DS3231's OSF is cleared |
+| `g -5` | the DS3231's aging offset, -128..127 (about 0.1 ppm a step; plus slows it), applied by a temperature conversion |
 | `h` | the help |
 
 ### The debug log (D5)
@@ -356,7 +367,7 @@ edit the copies here.
     with Backspace, and Ctrl-L. The arrow keys do nothing visible: the
     home screen only scrolls the cell, whose five labels already fit, so
     whether they arrive hasn't been seen.
-  * Not yet run on a chip: HMC6352, DS1307, MMC56x3, LSM303DLHC,
+  * Not yet run on a chip: HMC6352, DS1307, DS3231, MMC56x3, LSM303DLHC,
     the BMP388, and the PM25 and DS18B20 options. Those drivers have run only
     in Claude-iTransport's host tests, against simulated chips.
 * **The bus clear** has run only on the PC: its code against a simulated

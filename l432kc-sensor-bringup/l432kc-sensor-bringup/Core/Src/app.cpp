@@ -25,7 +25,10 @@
   *    0x44/45   SHT31                    (answers)
   *    0x5C/5D   LPS35HW                  (WHO_AM_I 0xB1 in 0x0F)
   *    0x60      MPL3115A2                (WHO_AM_I 0xC4 in 0x0C)
-  *    0x68      DS1307                   (answers; a DS3231 or an IMU would too)
+  *    0x68      DS3231                   (registers 0x0E..0x12 as only a DS3231 has
+  *                                        them, and its register pointer wrapping
+  *                                        from 0x12 to the seconds; read only),
+  *              otherwise DS1307         (answers; an IMU would too)
   *    0x76/77   BME280 0x60, BMP280 0x58, BME680 0x61 in 0xD0;
   *              BMP390 0x60, BMP388 0x50 in 0x00
   *  One of each kind is driven (the first found); a second is reported.
@@ -91,6 +94,7 @@
 #include "xbmp390.h"
 #include "xDS18B20.h"
 #include "xds1307.h"
+#include "xds3231.h"
 #include "xhmc6352.h"
 #include "xHTU21DF.h"
 #include "xlps35hw.h"
@@ -295,7 +299,8 @@ static void printHelp(void)
     "  b 30.54   calibrate each barometer's sea-level reading to this, inHg",
     "  o         clear the calibration offsets",
     "  a 30.36   the MPL3115A2's altimeter setting, inHg, for its altitude",
-    "  t 2026-10-19 14:05:00   set the DS1307's time (24 hour)",
+    "  t 2026-10-19 14:05:00   set the RTC's time (DS1307 or DS3231, 24 hour)",
+    "  g -5      the DS3231's aging offset (-128..127, about 0.1 ppm a step)",
     "  h         this help",
   };
   for (const char *l : lines)
@@ -369,6 +374,7 @@ public:
   virtual const Barometer *barometer() { return nullptr; }  // station pressure, Pa
   // Console commands that only some sensors take
   virtual bool setTime(const DS1307::ds1307_time_t &) { return false; }
+  virtual bool setAging(int8_t offset) { (void) offset; return false; }
   virtual bool setAltimeterSetting(float pa) { (void) pa; return false; }   // sea-level reference, Pa
   // A barometer's sea-level figure (Pa), after each reading
   virtual void onSeaLevel(float pa) { (void) pa; }
@@ -734,6 +740,42 @@ public:
   bool setTime(const DS1307::ds1307_time_t &t) override { return d.setTime(t); }
 };
 
+// The DS3231 reads all its registers once a second: the time, and the
+// temperature its crystal compensation uses (a conversion every 64 s).
+class Ds3231 : public Sensor {
+  DS3231::xds3231<I2C> d;
+public:
+  explicit Ds3231(uint8_t a) : Sensor("ds3231", a), d(DS3231::ds3231_param_t(), &hi2c1, a, i2c1_mutexHandle) { d.setDebugTag(tag); }
+  void step(uint32_t now) override { d.main(now); }
+  bool reading(Line &l) override {
+    if (!d.newData()) return false;
+    rtc::rtc_time_t t;
+    static const char *const days[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+    if (!d.getTime(&t)) {
+      l.text("no valid time (set it with t)");
+      return true;
+    }
+    char s[48];
+    snprintf(s, sizeof(s), "%04u-%02u-%02u %02u:%02u:%02u %s", t.year, t.month, t.day, t.hour, t.minute, t.second,
+             t.weekday < 7 ? days[t.weekday] : "?");
+    l.text(s);
+    l.dbg[l.nDbg++] = (int32_t) rtc::toUnix(t);
+    l.value("T", d.getTemperature(), 2, " C");
+    int8_t aging;
+    if (d.getAging(&aging) && aging != 0) {
+      char g[24];
+      snprintf(g, sizeof(g), "  aging %d", aging);
+      l.text(g);
+    }
+    if (!d.timeValid()) l.text("  (OSF: the oscillator stopped; set the time with t)");
+    return true;
+  }
+  int state() override { return (int) d.state(); }
+  uint32_t periodMs() const override { return 1000; }
+  bool setTime(const DS1307::ds1307_time_t &t) override { return d.setTime(t); }
+  bool setAging(int8_t offset) override { d.setAging(offset); return true; }
+};
+
 class Mmc56x3 : public Sensor {
   MMC56X3::xmmc56x3<I2C> d;
   static MMC56X3::mmc56x3_param_t param() {
@@ -869,7 +911,7 @@ struct Running {
   uint32_t startTick = 0;
   bool reportedStale = false;              // sensorTask's, so a silent sensor is reported once
   uint32_t calSeen = 0, clearSeen = 0;     // the thread's
-  uint32_t altSeen = 0;
+  uint32_t altSeen = 0, agingSeen = 0;
 };
 static Running g_running[MAX_SENSORS];
 static int g_nRunning = 0;
@@ -878,6 +920,8 @@ static std::atomic<float> g_calInHg{NAN};
 static std::atomic<uint32_t> g_calGen{0}, g_clearGen{0};
 static std::atomic<float> g_altInHg{NAN};  // the a command's altimeter setting
 static std::atomic<uint32_t> g_altGen{0};
+static std::atomic<int> g_aging{0};        // the g command's aging offset
+static std::atomic<uint32_t> g_agingGen{0};
 static std::atomic<bool> g_timeReq{false};
 static DS1307::ds1307_time_t g_time;      // valid while g_timeReq is set
 
@@ -913,6 +957,12 @@ static void sensorThread(void *arg)
     if (g_timeReq.load(std::memory_order_acquire) && s->setTime(g_time)) {
       g_timeReq.store(false, std::memory_order_release);
       consolePrint("%-9s time set\r\n", s->tag);
+    }
+    const uint32_t gg = g_agingGen.load();
+    if (gg != r->agingSeen) {
+      r->agingSeen = gg;
+      if (s->setAging((int8_t) g_aging.load()))
+        consolePrint("%-9s aging offset %d: written, then a temperature conversion applies it\r\n", s->tag, g_aging.load());
     }
     const uint32_t ag = g_altGen.load();
     if (ag != r->altSeen) {
@@ -1005,6 +1055,26 @@ static bool readReg(uint8_t addr, uint8_t reg, uint8_t *v, uint16_t n = 1)
   return HAL_I2C_Mem_Read(&hi2c1, (uint16_t)(addr << 1), reg, I2C_MEMADD_SIZE_8BIT, v, n, 10) == HAL_OK;
 }
 
+// A DS3231 or a DS1307 at 0x68? Reads only. A DS3231's registers 0x0E..0x12
+// show what only it has (ds3231_probe_regs()), and its register pointer
+// wraps from 0x12 to the seconds, where a DS1307 has RAM at 0x13: two bytes
+// read from 0x12 end with the seconds, read just before or after (they may
+// tick between). Seconds of 00 can't tell a zeroed RAM from a DS3231, so
+// that is tried again. Anything else is a DS1307, as before. (The wrap is
+// general knowledge, not yet checked against the datasheet.)
+static bool isDs3231(void)
+{
+  for (int tries = 0; tries < 3; ++tries) {
+    uint8_t r[5], s0, two[2], s1;
+    if (!readReg(0x68, 0x0E, r, 5) || !DS3231::ds3231_probe_regs(r)) return false;
+    if (!readReg(0x68, 0x00, &s0) || !readReg(0x68, 0x12, two, 2) || !readReg(0x68, 0x00, &s1)) return false;
+    if (two[1] != s0 && two[1] != s1) return false;
+    if (two[1] != 0x00) return true;
+    osDelay(600);                          // :00, ambiguous: again (the third try is past :00)
+  }
+  return false;
+}
+
 // The Si70xx's electronic ID, second part (command 0xFC 0xC9): its first
 // byte is SNB_3, the part number (0x0D Si7013, 0x14 Si7020, 0x15 Si7021;
 // Silicon Labs' datasheet as general knowledge has it). An HTU21D(F) is
@@ -1020,7 +1090,7 @@ static uint8_t si70xxPart(void)
 // What one scan found, decided while holding the bus, started after
 enum Found : uint8_t {
   F_NONE, F_AHT20, F_BME280, F_BME680, F_BMP280, F_BMP390, F_BMP388, F_HMC6352, F_HTU21DF, F_SI7021,
-  F_LPS35HW, F_MPL3115A2, F_SHT31, F_DS1307, F_MMC56X3, F_LSM303_A, F_LSM303_M
+  F_LPS35HW, F_MPL3115A2, F_SHT31, F_DS1307, F_MMC56X3, F_LSM303_A, F_LSM303_M, F_DS3231
 };
 struct Hit { Found what; uint8_t addr; };
 
@@ -1076,7 +1146,7 @@ static int scanBus(Hit *hits, int maxHits)
     if (readReg(0x60, MPL3115A2_ID_REG, v) && v[0] == mpl3115a2_who_am_i) add(F_MPL3115A2, 0x60);
     else note("  0x%02X: not an MPL3115A2 (WHO_AM_I 0x%02X)\r\n", 0x60, v[0], 0);
   }
-  if (ack[0x68]) add(F_DS1307, 0x68);
+  if (ack[0x68]) add(isDs3231() ? F_DS3231 : F_DS1307, 0x68);
   for (uint8_t a = 0x76; a <= 0x77; ++a) {
     uint8_t d0 = 0, i0 = 0;
     if (!ack[a] || !readReg(a, BOSCH_ID_REG, &d0) || !readReg(a, BMP3_ID_REG, &i0))
@@ -1096,7 +1166,8 @@ static int scanBus(Hit *hits, int maxHits)
     consolePrint("%s", notes[i]);
   static const char *const names[] = {"", "AHT20", "BME280", "BME680", "BMP280", "BMP390", "BMP388", "HMC6352",
                                       "HTU21D(F)", "Si70xx", "LPS35HW", "MPL3115A2", "SHT31", "DS1307 (assumed)",
-                                      "MMC56x3", "LSM303DLHC accelerometer (assumed)", "LSM303DLHC magnetometer"};
+                                      "MMC56x3", "LSM303DLHC accelerometer (assumed)", "LSM303DLHC magnetometer",
+                                      "DS3231"};
   for (int i = 0; i < nHits; ++i)
     consolePrint("  0x%02X: %s\r\n", hits[i].addr, names[hits[i].what]);
   return nHits;
@@ -1125,6 +1196,7 @@ static void startFound(const Hit &h, bool *started)
   case F_MPL3115A2: { static Mpl3115a2 s(h.addr); start(s); break; }
   case F_SHT31:     { static Sht31s s(h.addr); start(s); break; }
   case F_DS1307:    { static Ds1307 s(h.addr); start(s); break; }
+  case F_DS3231:    { static Ds3231 s(h.addr); start(s); break; }
   case F_MMC56X3:   { static Mmc56x3 s(h.addr); start(s); break; }
   case F_LSM303_A:  { static Lsm303Accel s(h.addr); start(s); break; }
   case F_LSM303_M:  { static Lsm303Mag s(h.addr); start(s); break; }
@@ -1414,6 +1486,19 @@ static void command(const char *cmd, bool *scanPending)
       g_altInHg.store(inHg);
       g_altGen.fetch_add(1);              // the MPL3115A2's thread takes it and says so
     }
+  } else if (cmd[0] == 'g' && cmd[1] == ' ') {
+    const long v = strtol(cmd + 2, &end, 10);
+    bool any = false;
+    for (int i = 0; i < g_nRunning; ++i)
+      if (strcmp(g_running[i].s->tag, "ds3231") == 0) any = true;
+    if (end == cmd + 2 || v < -128 || v > 127) {
+      consolePrint("g <offset>, the DS3231's aging offset -128..127, e.g. g -5\r\n");
+    } else if (!any) {
+      consolePrint("no DS3231 running\r\n");
+    } else {
+      g_aging.store((int) v);
+      g_agingGen.fetch_add(1);            // the DS3231's thread takes it and says so
+    }
   } else if (cmd[0] == 'o' && cmd[1] == 0) {
     g_clearGen.fetch_add(1);
     consolePrint("calibration offsets cleared\r\n");
@@ -1430,10 +1515,10 @@ static void command(const char *cmd, bool *scanPending)
       if (!DS1307::ds1307_valid(t)) {
         consolePrint("not a valid date and time in 2000..2099\r\n");
       } else if (g_timeReq.load()) {
-        consolePrint("the last time set hasn't been taken yet (is there a DS1307?)\r\n");
+        consolePrint("the last time set hasn't been taken yet (is there a DS1307 or DS3231?)\r\n");
       } else {
         g_time = t;
-        g_timeReq.store(true, std::memory_order_release);   // the DS1307's thread takes it
+        g_timeReq.store(true, std::memory_order_release);   // the RTC's thread takes it
       }
     }
   } else if ((cmd[0] == 'h' || cmd[0] == '?') && cmd[1] == 0) {

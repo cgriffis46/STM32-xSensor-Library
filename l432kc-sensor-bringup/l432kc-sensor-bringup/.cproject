@@ -75,6 +75,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/DS18B20/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/ds3231/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/HMC6352/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/htu21df/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/lps35hw/inc"/>
@@ -115,6 +116,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/DS18B20/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/ds3231/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/HMC6352/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/htu21df/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/lps35hw/inc"/>
@@ -242,6 +244,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/DS18B20/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/ds3231/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/HMC6352/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/htu21df/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/lps35hw/inc"/>
@@ -282,6 +285,7 @@
 									<listOptionValue builtIn="false" value="../isensor/bmp390/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/DS18B20/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/ds1307/inc"/>
+									<listOptionValue builtIn="false" value="../isensor/ds3231/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/HMC6352/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/htu21df/inc"/>
 									<listOptionValue builtIn="false" value="../isensor/lps35hw/inc"/>

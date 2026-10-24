@@ -14,7 +14,7 @@ DST="$HERE/l432kc-sensor-bringup"
 IT="$SRC/iTransport/itransport"
 
 # Sensor drivers: isensor/<folder>, inc/ and src/ each
-SENSORS="aht20 bme280 bme680 bmp280 bmp390 DS18B20 ds1307 HMC6352 htu21df lps35hw lsm303dlhc mmc56x3 mpl3115a2 PM25 sht31 si7021"
+SENSORS="aht20 bme280 bme680 bmp280 bmp390 DS18B20 ds1307 ds3231 HMC6352 htu21df lps35hw lsm303dlhc mmc56x3 mpl3115a2 PM25 sht31 si7021"
 
 # itransport: the bus classes and the debug log
 IT_INC="BusTransport.h DebugLog.h I2CTransport.h ISensorTransport.h OneWireUartTransport.h SPITransport.h iTransport.h iTransportOneWire.h"
@@ -23,7 +23,7 @@ IT_SRC="BusTransport.cpp DebugLog.cpp I2CTransport.cpp OneWireUartTransport.cpp"
 STM32_INC="Stm32DebugPort.h Stm32HalI2CTransport.h Stm32HalOneWireTransport.h Stm32HalUartTransport.h"
 STM32_SRC="Stm32HalI2CTransport.cpp Stm32HalOneWireTransport.cpp Stm32HalUartTransport.cpp Stm32I2CItCallbacks.cpp Stm32UartItCallbacks.cpp"
 # isensor's own headers: the state machine and the sensor interfaces
-IS_INC="SensorStateMachine.h Barometer.h Thermometer.h Hygrometer.h SeaLevelBarometer.h"
+IS_INC="SensorStateMachine.h Barometer.h Thermometer.h Hygrometer.h SeaLevelBarometer.h RtcDate.h"
 # iDisplay: the console's GUI on the PuTTY terminal (xTerminal, xGui, xCell).
 # Whole folders: the linker's --gc-sections drops what isn't called.
 ID_DIRS="inc src gui/inc gui/src hw/freertos/inc hw/freertos/src hmi/inc hmi/src terminal/inc terminal/src"
