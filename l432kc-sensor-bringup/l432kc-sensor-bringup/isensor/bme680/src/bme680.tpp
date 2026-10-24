@@ -226,6 +226,8 @@ bme680<TTransport>::bme680(const bme680_param_t &param, TArgs&&... transportArgs
 	_newData=false;
 	_start_measurement=false;
 	phase_start=0;
+	_lastStart=0;
+	_seaLevelPa=bme680_sea_level_default_pa;
 	_page=0xFF;
 	_pageWant=0;
 	_pageReturn=bme680_init_state;
@@ -388,15 +390,16 @@ void bme680<TTransport>::main(uint32_t nowMs){
 
 	case bme680_done_state:
 		// The period runs from the start of one measurement to the next.
-		if((nowMs-phase_start)>=_param.period_ms||_start_measurement){
+		if((nowMs-_lastStart)>=_param.period_ms||_start_measurement){
 			_start_measurement=false;
 			phase_start=nowMs;
+			this->nextPeriod(_lastStart,nowMs,_param.period_ms);
 			enter(bme680_force_state,nowMs);
 		} else {
 			// No longer than bme680_request_poll_ms at a time, so a
 			// startMeasurement() request is seen without waiting out
 			// the whole period.
-			const uint32_t left=_param.period_ms-(nowMs-phase_start);
+			const uint32_t left=_param.period_ms-(nowMs-_lastStart);
 			sleep(left<bme680_request_poll_ms?left:bme680_request_poll_ms);
 		}
 		break;
@@ -556,6 +559,21 @@ void bme680<TTransport>::onFail(){
 	_reading.gas_resistance=NAN;
 	_reading.gas_valid=false;
 	_reading.heat_stable=false;
+}
+
+// The international barometric formula (the standard atmosphere up to
+// 11 km): h = 44330 * (1 - (p / p0)^(1 / 5.255)), as BMP280Sensor uses
+// (general knowledge, not from Bosch's API, which has no altitude).
+template <typename TTransport>
+float bme680<TTransport>::getAltitude() const{
+	return 44330.0f*(1.0f-powf(_reading.pressure/_seaLevelPa,1.0f/5.255f));
+}
+
+template <typename TTransport>
+bool bme680<TTransport>::setSeaLevelPressure(float pa){
+	if(!(pa>0.0f)||isinf(pa)) return false;
+	_seaLevelPa=pa;
+	return true;
 }
 
 template <typename TTransport>

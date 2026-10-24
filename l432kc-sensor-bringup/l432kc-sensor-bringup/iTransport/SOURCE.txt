@@ -1,5 +1,5 @@
 Vendored from https://github.com/cgriffis46/Claude-iTransport
-commit ce2a73f (claude/ds3231-datasheet, 2026-10-24; MIT, see iTransport/LICENSE), by
+commit 955814e (HEAD, 2026-10-24; MIT, see iTransport/LICENSE), by
 ../sync_from_claude_itransport.sh. Copied unchanged:
 
   iTransport/inc, src            <- iTransport/itransport/inc, src
@@ -9,7 +9,7 @@ commit ce2a73f (claude/ds3231-datasheet, 2026-10-24; MIT, see iTransport/LICENSE
   iTransport/hw/stm32/inc, src   <- iTransport/itransport/hw/stm32
                                     (Stm32DebugPort.h Stm32HalI2CTransport.h Stm32HalOneWireTransport.h Stm32HalUartTransport.h
                                      Stm32HalI2CTransport.cpp Stm32HalOneWireTransport.cpp Stm32HalUartTransport.cpp Stm32I2CItCallbacks.cpp Stm32UartItCallbacks.cpp)
-  isensor/inc                    <- isensor/inc (SensorStateMachine.h Barometer.h Thermometer.h Hygrometer.h SeaLevelBarometer.h RtcDate.h)
+  isensor/inc                    <- isensor/inc (SensorStateMachine.h Barometer.h Thermometer.h Hygrometer.h Altimeter.h SeaLevelBarometer.h RtcDate.h)
   isensor/<driver>/inc, src      <- isensor/<driver>, for:
                                     aht20 bme280 bme680 bmp280 bmp390 DS18B20 ds1307 ds3231 HMC6352 htu21df lps35hw lsm303dlhc mmc56x3 mpl3115a2 PM25 sht31 si7021
   iDisplay/<folder>              <- iDisplay/<folder>, for:
