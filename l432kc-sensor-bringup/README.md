@@ -384,6 +384,9 @@ edit the copies here.
 * **Build:** built with arm-none-eabi-gcc 13 using the CubeIDE flags, without
   warnings, in all three USART1 settings: about 108 KB flash at -Os (180 KB at
   -O0) of 256 KB, and 47 KB RAM of 64 KB, 32 KB of it the FreeRTOS heap.
+  Rebuilt on 2026-10-26 with the xPack arm-none-eabi-gcc 13.3.1, the same
+  flags (-Os, ITRANSPORT_DEBUG=2), without warnings in all three settings:
+  117 to 120 KB flash.
 * **Stacks:** estimated from `-fstack-usage`, about 1.3 KB of each sensor
   thread's 2 KB, and less for sensorTask. Newlib's printf frames are a guess,
   not measured.
@@ -395,3 +398,12 @@ edit the copies here.
   USART2 with its interrupt, LD3, sensorTask, consoleTask and their mutexes,
   and the 32 KB heap. Open it in CubeMX and check it before generating code
   over the project.
+
+## Fixes
+
+* 2026-10-26: `app_sensor_task()`'s `started[]` was sized
+  `F_LSM303_M + 1`, one short since `F_DS3231` was added after it, so a
+  DS3231 found at 0x68 wrote a byte past the array on sensorTask's stack.
+  `enum Found` now ends with `F_COUNT`, which sizes the array (as the ESP32
+  port, ESP32-xSensor-Library's `esp32s3-sensor-bringup`, already did).
+  Built, not run on the board.
