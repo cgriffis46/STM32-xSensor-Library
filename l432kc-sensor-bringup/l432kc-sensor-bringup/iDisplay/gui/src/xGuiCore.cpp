@@ -8,12 +8,22 @@ xGuiCore::xGuiCore(iTextSurface& surface, xScreen& home)
 }
 
 void xGuiCore::start() {
+    idle_ = 0;
     depth_ = 1;
     stack_[0] = &home_;
     home_.onEnter(*this);
 }
 
 bool xGuiCore::handle(const xGuiEvent& ev) {
+    if (ev.type != xGuiEventType::Refresh) {
+        idle_ = 0;
+    } else if (idle_ < 0xFFFFFFFFu) {
+        ++idle_;
+        if (idleHome_ && idle_ >= idleHome_ && depth_ > 1) {
+            home();
+            return true;
+        }
+    }
     switch (ev.type) {
     case xGuiEventType::Key:
         top().onKey(ev.key, ev.action, *this);

@@ -98,6 +98,13 @@ public:
     // character set, or the screen cannot tell them apart.
     void setCommandGlyphs(char del, char end) { delGlyph_ = del; endGlyph_ = end; }
 
+    // A password: every character but the one being edited drawn as
+    // mask ('*', say), so the value never shows whole on the display.
+    // The one under the cursor is shown, or there is nothing to choose
+    // by. 0 (the default) draws them all. value() is the real text.
+    void setMask(char mask) { mask_ = mask; }
+    char mask() const { return mask_; }
+
     xFieldResult onKey(xKey key, xKeyAction action);
 
     // From the cursor to the end of its row, scrolled sideways so the
@@ -123,6 +130,7 @@ private:
     uint8_t cand_ = 0;
     char delGlyph_ = '<';
     char endGlyph_ = '>';
+    char mask_ = 0;
 };
 
 // An xTextField with its own buffer of N bytes (N - 1 characters).

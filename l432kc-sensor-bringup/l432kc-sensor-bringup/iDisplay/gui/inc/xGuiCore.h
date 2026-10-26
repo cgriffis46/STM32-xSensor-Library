@@ -28,6 +28,17 @@ public:
     // Clears the surface and has the top screen draw on it.
     void render();
 
+    // Back to the home screen when nobody has pressed a key for a while:
+    // after `refreshes` Refresh events in a row with no other event
+    // between them (a key, or a screen opened from another thread), the
+    // stack is emptied as by home(). Counted in refreshes, like xHmi's
+    // timeouts, so it needs xGuiTicker: refreshes = timeout / the
+    // ticker's period (60 s at 500 ms: 120). 0 (the default) turns it
+    // off. Already at home, nothing happens: the home screen keeps its
+    // own state (xHmi has its own edit and unlock timeouts).
+    void setIdleHome(uint32_t refreshes) { idleHome_ = refreshes; idle_ = 0; }
+    uint32_t idleRefreshes() const { return idle_; }
+
     xScreen& top() const { return *stack_[depth_ - 1]; }
     uint8_t depth() const { return depth_; }
 
@@ -43,6 +54,8 @@ private:
     xScreen& home_;
     xScreen* stack_[kMaxDepth];
     uint8_t depth_;
+    uint32_t idleHome_ = 0;
+    uint32_t idle_ = 0;     // refreshes since the last other event
 };
 
 } // namespace idisplay

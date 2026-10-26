@@ -161,7 +161,7 @@ void xTextField::render(iTextSurface& s) const {
             s.putChar(glyphFor(cand_));
             s.setInverse(wasInverse);
         } else if (i < len_) {
-            s.putChar(buf_[i]);
+            s.putChar(mask_ ? mask_ : buf_[i]);
         } else {
             break;
         }
