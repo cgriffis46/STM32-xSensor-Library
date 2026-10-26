@@ -1091,7 +1091,8 @@ static uint8_t si70xxPart(void)
 // What one scan found, decided while holding the bus, started after
 enum Found : uint8_t {
   F_NONE, F_AHT20, F_BME280, F_BME680, F_BMP280, F_BMP390, F_BMP388, F_HMC6352, F_HTU21DF, F_SI7021,
-  F_LPS35HW, F_MPL3115A2, F_SHT31, F_DS1307, F_MMC56X3, F_LSM303_A, F_LSM303_M, F_DS3231
+  F_LPS35HW, F_MPL3115A2, F_SHT31, F_DS1307, F_MMC56X3, F_LSM303_A, F_LSM303_M, F_DS3231,
+  F_COUNT   // how many kinds; keep it last
 };
 struct Hit { Found what; uint8_t addr; };
 
@@ -1545,7 +1546,7 @@ void app_sensor_task(void *argument)
     consolePrint("I2C1: SDA still held low after %d clocks: check the wiring and power\r\n", BUS_CLEAR_MAX_CLOCKS);
   else if (g_busClear == -2)
     consolePrint("I2C1: SCL held low at start: check the wiring and power\r\n");
-  bool started[F_LSM303_M + 1];
+  bool started[F_COUNT];
   memset(started, 0, sizeof(started));
   g_bus.lastCheck = g_bus.lastFree = osKernelGetTickCount();
 
