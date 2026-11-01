@@ -119,9 +119,15 @@ private:
 			if (!shortPress) return false;
 			double f;
 			if (!num("meter.function", f)) return false;
-			const meter::Function next = nextFunction(_pos, (meter::Function)(uint8_t)f);
-			if (next == (meter::Function)(uint8_t)f) return false;
-			return setNum("meter.function", (double)(uint8_t)next);
+			// The next function the meter takes: one it can't do yet is skipped.
+			const meter::Function now = (meter::Function)(uint8_t)f;
+			meter::Function next = now;
+			for (uint8_t i = 0; i < 8; i++) {
+				next = nextFunction(_pos, next);
+				if (next == now) return false;
+				if (setNum("meter.function", (double)(uint8_t)next)) return true;
+			}
+			return false;
 		}
 		default:
 			return false;

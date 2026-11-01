@@ -11,3 +11,4 @@ Release/
 .metadata/
 # Host test binaries
 staging/**/test/*_test
+staging/**/test/packets.txt

@@ -18,6 +18,8 @@ CMSIS-RTOS2.
 | `idisplay/input/` | `KeyScanner` (up to 16 keys from one port: debounce, short press on release, long press, auto-repeat, chords, a one-deep event mailbox) and `Buzzer` / `iBeeper` (beep patterns, non-blocking) | `make -C staging/idisplay/input/test test` |
 | `idisplay/hw/stm32l1/` | `Stm32L1Lcd`: the STM32L1's LCD controller as an `iSegmentLcd`, register level and non-blocking | `make -C staging/idisplay/hw/stm32l1/test test` |
 | [`boards/gw121/`](boards/gw121/README.md) | The EEVblog 121GW: HY3131 range images and nominal scale, factory calibration from EEPROM, analog switch rules, rotary switch, pins | `make -C staging/boards/gw121/test test` |
+| [`boards/gw121/sim/`](boards/gw121/sim/README.md) | A stand-in 121GW: our firmware's meter stack on made-up readings, speaking the meter's Bluetooth protocol. For an STM32 with a BLE UART module (glue for the HAL included) | `make -C staging/boards/gw121/sim/test test` |
+| [`tools/web-bluetooth/`](tools/web-bluetooth/README.md) | The 121GW in the browser over Web Bluetooth: display, keys, chart, CSV log, demo mode | `node staging/tools/web-bluetooth/test/protocol.test.js …` |
 | `cross/` | The stack instantiated for the STM32L152xD, compiled with `arm-none-eabi-g++` (size check, nothing linked) | `make -C staging/cross cross` |
 
 The cross builds need ST's `cmsis_device_l1` headers:

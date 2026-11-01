@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>121GW — Web Bluetooth</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --line: #262c35; --text: #e6e9ee; --dim: #8b95a3;
+    --lcd: #c9d4b0; --lcd-ink: #1d2414; --lcd-off: rgba(29,36,20,0.12); --accent: #4f8cff; --warn: #e5a03a; --bad: #e5534b; --good: #3fb950;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; font-weight: 600; }
+  button { font: inherit; color: var(--text); background: #222833; border: 1px solid #333b47; border-radius: 6px; padding: 7px 12px; cursor: pointer; user-select: none; touch-action: manipulation; }
+  button:hover:not(:disabled) { background: #2a313d; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #state { color: var(--dim); margin-left: auto; font-size: 13px; }
+  #state .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); margin-right: 6px; vertical-align: middle; }
+  #state.on .dot { background: var(--good); }
+  main { display: grid; grid-template-columns: minmax(320px, 520px) 1fr; gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+
+  /* The meter's glass */
+  .lcd { background: var(--lcd); color: var(--lcd-ink); border-radius: 8px; padding: 12px 14px 10px; }
+  .lcd .row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .lcd .mode { font-weight: 700; font-size: 13px; }
+  .lcd .ann { display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+  .lcd .ann span { font-size: 11px; font-weight: 700; padding: 0 4px; border-radius: 3px; color: var(--lcd-off); }
+  .lcd .ann span.on { color: var(--lcd-ink); }
+  .lcd .value { font: 700 64px/1.05 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.02em; text-align: right; flex: 1; white-space: nowrap; }
+  .lcd .unit { font: 700 24px/1 ui-monospace, Menlo, Consolas, monospace; min-width: 70px; }
+  .lcd .sub { font: 600 15px/1.3 ui-monospace, Menlo, Consolas, monospace; min-height: 20px; }
+  .bar { display: grid; grid-template-columns: 14px repeat(25, 1fr); gap: 2px; margin: 8px 0 2px; height: 14px; }
+  .bar i { background: var(--lcd-off); border-radius: 1px; }
+  .bar i.on { background: var(--lcd-ink); }
+  .bar b { font-size: 11px; line-height: 14px; text-align: center; }
+  .barscale { display: flex; justify-content: space-between; font-size: 10px; padding-left: 16px; }
+  .stale .value, .stale .unit { opacity: 0.35; }
+
+  .keys { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; }
+  .keys button { padding: 12px 4px; font-weight: 600; }
+  .keys button.held { background: var(--warn); border-color: var(--warn); color: #111; }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 6px; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 10px; }
+  .stats div { background: #12161b; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
+  .stats small { color: var(--dim); display: block; font-size: 11px; }
+  .stats span { font: 600 15px ui-monospace, Menlo, Consolas, monospace; }
+  canvas { width: 100%; height: 260px; display: block; background: #12161b; border: 1px solid var(--line); border-radius: 6px; }
+  .tools { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .tools .count { color: var(--dim); }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; color: var(--dim); }
+  pre#raw { max-height: 220px; overflow: auto; background: #0b0d10; border: 1px solid var(--line); border-radius: 6px; padding: 8px; font-size: 12px; margin: 8px 0 0; }
+  textarea { width: 100%; min-height: 70px; background: #0b0d10; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 8px; font: 12px ui-monospace, Menlo, Consolas, monospace; }
+  #msg { padding: 10px 16px; display: none; border-bottom: 1px solid var(--line); }
+  #msg.show { display: block; }
+  #msg.warn { background: #2b2111; color: #f3c27a; }
+  #msg.err { background: #2b1414; color: #f19a95; }
+  code { font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>121GW</h1>
+  <button id="connect" class="primary">Connect</button>
+  <button id="disconnect" disabled>Disconnect</button>
+  <button id="demo">Demo</button>
+  <div id="state"><span class="dot"></span><span id="stateText">Not connected</span></div>
+</header>
+<div id="msg"></div>
+
+<main>
+  <section>
+    <div class="panel">
+      <div class="lcd stale" id="lcd">
+        <div class="row">
+          <div class="mode" id="mode">—</div>
+          <div class="ann" id="ann">
+            <span data-k="auto">AUTO</span><span data-k="hold">HOLD</span><span data-k="rel">REL</span>
+            <span data-k="minmax">MIN/MAX</span><span data-k="peak1ms">1ms PEAK</span><span data-k="lpf">LPF</span>
+            <span data-k="dbm">dBm</span><span data-k="apo">APO</span><span data-k="battLow">BAT</span>
+            <span data-k="bluetooth">BT</span><span data-k="logging">LOG</span><span data-k="danger">⚠</span>
+          </div>
+        </div>
+        <div class="row">
+          <div class="mode" id="acdc"></div>
+          <div class="value" id="value">-----</div>
+          <div class="unit" id="unit"></div>
+        </div>
+        <div class="bar" id="bar"><b id="barSign"></b></div>
+        <div class="barscale" id="barScale"></div>
+        <div class="sub" id="sub"></div>
+      </div>
+      <div class="keys" id="keys">
+        <button data-key="RANGE">RANGE</button><button data-key="HOLD">HOLD</button>
+        <button data-key="REL">REL</button><button data-key="PEAK">PEAK</button>
+        <button data-key="MODE">MODE</button><button data-key="MINMAX">MIN/MAX</button>
+        <button data-key="MEM">MEM</button><button data-key="SETUP">SETUP</button>
+      </div>
+      <div class="hint">Click for a short press; hold 0.7 s for a long press (it turns amber). Keys are sent as the phone app sends them.</div>
+      <div class="tools">
+        <button id="setClock" disabled>Set meter clock</button>
+        <span class="count" id="meta"></span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>Chart</h2>
+      <canvas id="chart" width="900" height="260"></canvas>
+      <div class="stats">
+        <div><small>Min</small><span id="sMin">—</span></div>
+        <div><small>Max</small><span id="sMax">—</span></div>
+        <div><small>Average</small><span id="sAvg">—</span></div>
+        <div><small>Rate</small><span id="sRate">—</span></div>
+      </div>
+      <div class="tools">
+        <button id="clearChart">Clear</button>
+        <button id="logToggle">Start logging</button>
+        <button id="logSave" disabled>Save CSV</button>
+        <span class="count" id="logCount"></span>
+      </div>
+    </div>
+
+    <details class="panel">
+      <summary>Raw data</summary>
+      <div class="tools"><span class="count" id="counts">0 packets, 0 bad</span></div>
+      <pre id="raw"></pre>
+    </details>
+
+    <details class="panel">
+      <summary>Bluetooth services</summary>
+      <p class="hint">The page asks the device for each of these services in turn and uses the first one it has. In it, it takes the first characteristic that notifies for data from the meter and the first writable one for keys. One UUID per line; saved in this browser.</p>
+      <textarea id="uuids"></textarea>
+      <div class="tools"><button id="saveUuids">Save</button><button id="resetUuids">Defaults</button></div>
+      <p class="hint">
+        <code>0bd51666-e7cb-469b-8e4d-2742f1ba77cc</code>: Bluegiga's serial service, the guess for the 121GW's BLE112 (not yet checked on a meter).<br>
+        <code>6e400001-b5a3-f393-e0a9-e50e24dcca9e</code>: Nordic UART, which Adafruit's Bluefruit modules use (a simulated meter on an STM32).
+      </p>
+    </details>
+  </section>
+</main>
+
+<script src="gw121-protocol.js"></script>
+<script>
+'use strict';
+const DEFAULT_UUIDS = [
+  '0bd51666-e7cb-469b-8e4d-2742f1ba77cc',   // Bluegiga serial (BLE112): the 121GW, guessed
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e',   // Nordic UART: Adafruit Bluefruit
+];
+const $ = (id) => document.getElementById(id);
+const CHART_POINTS = 600;
+
+// ---- state ----
+let device = null, rxChar = null, txChar = null, demoTimer = null;
+let writeChain = Promise.resolve();
+let lastPacketAt = 0, packetTimes = [];
+let series = [], seriesKey = '';
+let logging = false, logRows = [];
+const rawLines = [];
+
+// ---- messages ----
+function message(text, kind) {
+  const m = $('msg');
+  m.className = text ? 'show ' + (kind || 'warn') : '';
+  m.textContent = text || '';
+}
+function setState(text, on) {
+  $('stateText').textContent = text;
+  $('state').classList.toggle('on', !!on);
+}
+
+// ---- UUIDs ----
+function loadUuids() {
+  const saved = localStorage.getItem('gw121.uuids');
+  return saved ? saved.split(/\s+/).filter(Boolean) : DEFAULT_UUIDS.slice();
+}
+$('uuids').value = loadUuids().join('\n');
+$('saveUuids').onclick = () => {
+  const list = $('uuids').value.split(/\s+/).map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const bad = list.filter((u) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(u) && !/^0x[0-9a-f]{4}$/.test(u));
+  if (bad.length) { message('Not a UUID: ' + bad.join(', '), 'err'); return; }
+  localStorage.setItem('gw121.uuids', list.join(' '));
+  message('Saved. They apply at the next Connect.', 'warn');
+};
+$('resetUuids').onclick = () => { localStorage.removeItem('gw121.uuids'); $('uuids').value = DEFAULT_UUIDS.join('\n'); };
+const asService = (u) => /^0x/.test(u) ? parseInt(u, 16) : u;
+
+// ---- the stream ----
+const parser = new GW121.StreamParser({
+  onPacket: (f, bytes) => { showPacket(f); raw('rx', bytes); },
+  onEcho: (bytes) => raw('echo', bytes),
+  onBad: (err, bytes) => raw('bad ' + err, bytes),
+});
+
+function raw(kind, bytes) {
+  const ascii = Array.from(bytes, (b) => (b >= 32 && b < 127) ? String.fromCharCode(b) : '\\x' + b.toString(16).padStart(2, '0')).join('');
+  rawLines.push(new Date().toISOString().slice(11, 23) + ' ' + kind.padEnd(6) + ' ' + ascii.replace(/\r\n$/, ''));
+  while (rawLines.length > 60) rawLines.shift();
+  if ($('raw').closest('details').open) $('raw').textContent = rawLines.join('\n');
+  $('counts').textContent = `${parser.good} packets, ${parser.bad} bad`;
+}
+
+// ---- Web Bluetooth ----
+async function connect() {
+  if (!('bluetooth' in navigator)) {
+    message(window.isSecureContext
+      ? 'This browser has no Web Bluetooth. Use Chrome or Edge on Windows, macOS, Linux, Android or ChromeOS.'
+      : 'Web Bluetooth needs a secure page: open it from https:// or http://localhost (python3 -m http.server).', 'err');
+    return;
+  }
+  stopDemo();
+  const uuids = loadUuids();
+  try {
+    message('');
+    device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: uuids.map(asService) });
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    setState('Connecting to ' + (device.name || 'device') + '…');
+    const server = await device.gatt.connect();
+    let service = null, used = '';
+    for (const u of uuids) {
+      try { service = await server.getPrimaryService(asService(u)); used = u; break; } catch (e) { /* not this one */ }
+    }
+    if (!service) throw new Error('The device has none of the services in the list (Bluetooth services, below). Find its UUID with nRF Connect and add it.');
+    const chars = await service.getCharacteristics();
+    rxChar = chars.find((c) => c.properties.notify || c.properties.indicate);
+    txChar = chars.find((c) => c.properties.writeWithoutResponse || c.properties.write);
+    if (!rxChar) throw new Error('Service ' + used + ' has no characteristic that notifies.');
+    rxChar.addEventListener('characteristicvaluechanged', (e) => {
+      parser.push(new Uint8Array(e.target.value.buffer, e.target.value.byteOffset, e.target.value.byteLength));
+    });
+    await rxChar.startNotifications();
+    setState(`${device.name || 'Device'} · ${used.slice(0, 8)}…`, true);
+    $('connect').disabled = true; $('disconnect').disabled = false;
+    $('setClock').disabled = !txChar;
+    if (!txChar) message('Connected, but the service has nothing writable: keys can\'t be sent.', 'warn');
+  } catch (e) {
+    if (e.name === 'NotFoundError' && /cancel/i.test(e.message)) { setState('Not connected'); return; }
+    message(e.message || String(e), 'err');
+    setState('Not connected');
+    if (device && device.gatt.connected) device.gatt.disconnect();
+  }
+}
+
+function onDisconnected() {
+  rxChar = txChar = null;
+  $('connect').disabled = false; $('disconnect').disabled = true; $('setClock').disabled = true;
+  setState('Disconnected');
+  $('lcd').classList.add('stale');
+}
+
+// Writes one after another (one GATT operation at a time), 20 bytes each:
+// the smallest a BLE link carries.
+function send(bytes) {
+  if (demoTimer) { demoKey(bytes); return Promise.resolve(); }
+  if (!txChar) return Promise.resolve();
+  raw('tx', bytes);
+  writeChain = writeChain.then(async () => {
+    for (let i = 0; i < bytes.length; i += 20) {
+      const part = bytes.slice(i, i + 20);
+      if (txChar.properties.writeWithoutResponse && txChar.writeValueWithoutResponse) await txChar.writeValueWithoutResponse(part);
+      else if (txChar.writeValueWithResponse) await txChar.writeValueWithResponse(part);
+      else await txChar.writeValue(part);
+    }
+  }).catch((e) => message('Send failed: ' + e.message, 'err'));
+  return writeChain;
+}
+
+$('connect').onclick = connect;
+$('disconnect').onclick = () => { stopDemo(); if (device && device.gatt.connected) device.gatt.disconnect(); else onDisconnected(); };
+$('setClock').onclick = () => send(GW121.clockMessage(new Date()));
+
+// ---- keys: short click, or held 0.7 s for a long press ----
+for (const b of document.querySelectorAll('#keys button')) {
+  let timer = null, long = false;
+  const down = (e) => { e.preventDefault(); long = false; b.classList.remove('held'); timer = setTimeout(() => { long = true; b.classList.add('held'); }, 700); };
+  const up = () => {
+    if (!timer) return;
+    clearTimeout(timer); timer = null;
+    send(GW121.keyMessage(b.dataset.key, long));
+    setTimeout(() => b.classList.remove('held'), 150);
+  };
+  b.addEventListener('pointerdown', down);
+  b.addEventListener('pointerup', up);
+  b.addEventListener('pointerleave', () => { if (timer) { clearTimeout(timer); timer = null; b.classList.remove('held'); } });
+  b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); send(GW121.keyMessage(b.dataset.key, e.shiftKey)); } });
+}
+
+// ---- the display ----
+const barEl = $('bar');
+for (let i = 0; i < 25; i++) barEl.appendChild(document.createElement('i'));
+const BAR_SCALES = [['0', '1', '2', '3', '4', '5'], ['0', '10', '20', '30', '40', '50'], ['0', '100', '200', '300', '400', '500'], ['0', '200', '400', '600', '800', '1000']];
+
+function showPacket(f) {
+  const now = performance.now();
+  packetTimes.push(now); while (packetTimes.length > 20) packetTimes.shift();
+  lastPacketAt = now;
+  const m = GW121.main(f);
+  $('lcd').classList.remove('stale');
+  $('mode').textContent = m.mode + (f.status.auto ? '' : ' · range ' + f.range);
+  $('value').textContent = m.text;
+  $('unit').textContent = m.unit;
+  $('acdc').textContent = f.status.acdc;
+  for (const s of document.querySelectorAll('#ann span')) {
+    const k = s.dataset.k;
+    s.classList.toggle('on', k === 'minmax' ? f.status.minmax > 0 : !!f.status[k]);
+  }
+  const bars = barEl.querySelectorAll('i');
+  bars.forEach((el, i) => el.classList.toggle('on', f.bar.on && i < f.bar.segments));
+  $('barSign').textContent = f.bar.on ? (f.bar.negative ? '−' : '+') : '';
+  $('barScale').innerHTML = f.bar.on ? BAR_SCALES[f.bar.range].map((t) => `<span>${t}</span>`).join('') : '';
+  $('sub').textContent = [GW121.subText(f.sub1), GW121.subText(f.sub2), GW121.subText(f.sub3)].filter(Boolean).join('   ');
+  $('meta').textContent = `Serial ${String(f.serial).padStart(5, '0')} · calibrated ${f.calMonth}/${f.calYear}`;
+
+  // chart: one series per mode, range and unit
+  const key = f.mode + '/' + m.unit;
+  if (key !== seriesKey) { series = []; seriesKey = key; }
+  series.push({ t: Date.now(), v: f.overload ? NaN : m.shown, unit: m.unit });
+  if (series.length > CHART_POINTS) series.shift();
+  if (logging) {
+    logRows.push([new Date().toISOString(), m.mode, f.range, f.overload ? 'OL' : m.shown, m.unit, f.status.acdc,
+      f.status.auto ? 'auto' : 'manual', f.status.hold ? 'hold' : '', f.status.rel ? 'rel' : '']);
+    $('logCount').textContent = logRows.length + ' readings';
+  }
+  drawChart();
+}
+
+setInterval(() => {   // stale after 3 s without a packet; the rate
+  if (lastPacketAt && performance.now() - lastPacketAt > 3000) $('lcd').classList.add('stale');
+  if (packetTimes.length > 1) {
+    const dt = (packetTimes[packetTimes.length - 1] - packetTimes[0]) / (packetTimes.length - 1);
+    $('sRate').textContent = (1000 / dt).toFixed(1) + '/s';
+  }
+}, 500);
+
+// ---- chart ----
+const cv = $('chart'), cx = cv.getContext('2d');
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
+  if (cv.width !== w * dpr || cv.height !== h * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx.clearRect(0, 0, w, h);
+  const pts = series.filter((p) => isFinite(p.v));
+  if (!pts.length) { ['sMin', 'sMax', 'sAvg'].forEach((id) => $(id).textContent = '—'); return; }
+  let lo = Math.min(...pts.map((p) => p.v)), hi = Math.max(...pts.map((p) => p.v));
+  const avg = pts.reduce((a, p) => a + p.v, 0) / pts.length;
+  const unit = pts[pts.length - 1].unit;
+  $('sMin').textContent = fmt(lo) + ' ' + unit; $('sMax').textContent = fmt(hi) + ' ' + unit; $('sAvg').textContent = fmt(avg) + ' ' + unit;
+  if (hi === lo) { hi += Math.abs(hi) * 0.01 || 1; lo -= Math.abs(lo) * 0.01 || 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const L = 64, R = 10, T = 10, B = 22;
+  const x = (i) => L + (w - L - R) * (i / Math.max(1, CHART_POINTS - 1));
+  const y = (v) => T + (h - T - B) * (1 - (v - lo) / (hi - lo));
+  cx.strokeStyle = '#262c35'; cx.fillStyle = '#8b95a3'; cx.font = '11px system-ui'; cx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + (hi - lo) * k / 4, yy = Math.round(y(v)) + 0.5;
+    cx.beginPath(); cx.moveTo(L, yy); cx.lineTo(w - R, yy); cx.stroke();
+    cx.fillText(fmt(v), 6, yy + 4);
+  }
+  const t0 = series[0].t, t1 = series[series.length - 1].t;
+  cx.fillText(((t1 - t0) / 1000).toFixed(0) + ' s', w - R - 34, h - 6);
+  cx.strokeStyle = '#4f8cff'; cx.lineWidth = 1.6; cx.beginPath();
+  let started = false;
+  const off = CHART_POINTS - series.length;
+  series.forEach((p, i) => {
+    if (!isFinite(p.v)) { started = false; return; }
+    const xx = x(i + off), yy = y(p.v);
+    if (!started) { cx.moveTo(xx, yy); started = true; } else cx.lineTo(xx, yy);
+  });
+  cx.stroke();
+}
+const fmt = (v) => { const a = Math.abs(v); return a >= 1000 ? v.toFixed(0) : a >= 100 ? v.toFixed(1) : a >= 10 ? v.toFixed(2) : v.toFixed(4); };
+window.addEventListener('resize', drawChart);
+$('clearChart').onclick = () => { series = []; drawChart(); };
+
+// ---- logging ----
+$('logToggle').onclick = () => {
+  logging = !logging;
+  $('logToggle').textContent = logging ? 'Stop logging' : 'Start logging';
+  if (logging) { logRows = []; $('logCount').textContent = '0 readings'; }
+  $('logSave').disabled = logging || !logRows.length;
+};
+$('logSave').onclick = () => {
+  const head = 'time,mode,range,value,unit,acdc,ranging,hold,rel\n';
+  const csv = head + logRows.map((r) => r.map((c) => /[",]/.test(String(c)) ? '"' + String(c).replace(/"/g, '""') + '"' : c).join(',')).join('\n') + '\n';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = '121gw-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.csv';
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+// ---- demo: packets made here, so the page can be tried without a meter ----
+const demo = { mode: 1, range: 0, auto: true, hold: false, held: 0, rel: false, ref: 0, t: 0 };
+const DEMO_SIGNALS = { 1: 1.2345, 2: 230.0, 3: 0.0123, 9: 3300, 17: 123e-6, 19: 12.3e-3 };
+const DEMO_CYCLE = [1, 2, 3, 9, 17, 19];
+function demoTick() {
+  demo.t += 0.25;
+  const base = DEMO_SIGNALS[demo.mode];
+  let v = base * (1 + 0.02 * Math.sin(demo.t / 2)) - (demo.rel ? demo.ref : 0);
+  if (demo.hold) v = demo.held; else demo.held = v;   // held: the same value, still sent
+  const mode = GW121.MODES[demo.mode];
+  const PREF = { '': 1, k: 1e3, M: 1e6, m: 1e-3, 'µ': 1e-6, n: 1e-9 };
+  if (demo.auto) {   // the lowest range it fits
+    demo.range = mode.ranges.length - 1;
+    for (let r = 0; r < mode.ranges.length; r++) {
+      const [dec, p] = mode.ranges[r];
+      if (Math.abs(v) / PREF[p] * Math.pow(10, dec) < 50000) { demo.range = r; break; }
+    }
+  }
+  const [dec, p] = mode.ranges[demo.range];
+  const digits = Math.round(Math.abs(v) / PREF[p] * Math.pow(10, dec));
+  const ol = digits > 65535;
+  const segs = Math.min(25, Math.floor(digits / 50000 * 25));
+  const pkt = GW121.encode({
+    mode: demo.mode, range: demo.range, overload: ol, negative: v < 0, digits: ol ? 0 : digits, serial: 12345, calYear: 2026, calMonth: 11,
+    sub1: { mode: 100, flags: 1, value: 236 + Math.round(Math.sin(demo.t / 7) * 3) },
+    bar: { on: true, negative: v < 0, range: Math.min(3, Math.max(0, String(Math.floor(50000 / Math.pow(10, dec))).length - 1)), segments: segs },
+    status: { auto: demo.auto, apo: true, bluetooth: true, acdc: [2, 4, 16, 18, 20].includes(demo.mode) ? 'AC' : [1, 3, 17, 19, 21].includes(demo.mode) ? 'DC' : '', rel: demo.rel, hold: demo.hold ? 1 : 0 },
+    sub2: [2, 4].includes(demo.mode) ? { mode: 6, flags: 2 | 16, value: 5000 } : null, sub3: null,
+  });
+  for (let i = 0; i < pkt.length; i += 20) parser.push(pkt.slice(i, i + 20));
+}
+function demoKey(bytes) {
+  raw('tx', bytes);
+  if (bytes[0] !== GW121.KEY) return;
+  const code = parseInt(String.fromCharCode(bytes[1], bytes[2]), 16), long = !!(code & 0x80), k = code & 0x7F;
+  const K = GW121.KEYS;
+  if (k === K.MODE && !long) { demo.mode = DEMO_CYCLE[(DEMO_CYCLE.indexOf(demo.mode) + 1) % DEMO_CYCLE.length]; demo.auto = true; demo.rel = false; }
+  if (k === K.RANGE) { if (long) demo.auto = true; else if (demo.auto) demo.auto = false; else demo.range = (demo.range + 1) % GW121.MODES[demo.mode].ranges.length; }
+  if (k === K.HOLD && !long) demo.hold = !demo.hold;
+  if (k === K.REL && !long) { demo.rel = !demo.rel; demo.ref = demo.rel ? DEMO_SIGNALS[demo.mode] : 0; }
+}
+function stopDemo() {
+  if (!demoTimer) return;
+  clearInterval(demoTimer); demoTimer = null;
+  $('demo').textContent = 'Demo'; $('connect').disabled = false; $('disconnect').disabled = true;
+  setState('Not connected');
+}
+$('demo').onclick = () => {
+  if (demoTimer) { stopDemo(); return; }
+  if (device && device.gatt && device.gatt.connected) device.gatt.disconnect();
+  demoTimer = setInterval(demoTick, 250);
+  $('demo').textContent = 'Stop demo'; $('connect').disabled = true; $('disconnect').disabled = false;
+  setState('Demo: made-up readings', true);
+  message('');
+};
+
+if (!('bluetooth' in navigator)) {
+  message(window.isSecureContext
+    ? 'This browser has no Web Bluetooth (Safari and Firefox don\'t). Use Chrome or Edge. Demo works anywhere.'
+    : 'Open this page from https:// or http://localhost for Web Bluetooth (python3 -m http.server in this folder). Demo works anywhere.', 'warn');
+}
+drawChart();
+</script>
+</body>
+</html>
