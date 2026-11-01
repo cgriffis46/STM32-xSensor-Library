@@ -88,7 +88,7 @@ public:
 	int32_t find(const char* name) override {
 		const size_t pl = strlen(_prefix);
 		if (strncmp(name, _prefix, pl) != 0) return -1;
-		for (int32_t i = 0; i < kCount; i++) if (strcmp(name + pl, kNames[i]) == 0) return i;
+		for (int32_t i = 0; i < kCount; i++) if (strcmp(name + pl, names()[i]) == 0) return i;
 		return -1;
 	}
 
@@ -142,7 +142,7 @@ public:
 		}
 	}
 
-	static const char* name(int32_t h) { return (h >= 0 && h < kCount) ? kNames[h] : nullptr; }
+	static const char* name(int32_t h) { return (h >= 0 && h < kCount) ? names()[h] : nullptr; }
 
 private:
 	static bool isAc(Function f) {
@@ -154,10 +154,16 @@ private:
 		       f == Function::DcMilliAmps || f == Function::DcMicroAmps;
 	}
 
-	static constexpr const char* kNames[kCount] = {
-		"value", "si", "decimals", "prefix", "unit", "valid", "ol", "settling", "fault", "uncal", "ac", "dc", "acdc",
-		"min", "max", "bar", "barrange", "function", "range", "ranges", "auto", "hold", "rel",
-	};
+	// A function rather than a static constexpr array member: before C++17
+	// such a member needs a definition outside the class as well, and a
+	// project built as C++14 (STM32CubeIDE's default) fails to link without one.
+	static const char* const* names() {
+		static const char* const k[kCount] = {
+			"value", "si", "decimals", "prefix", "unit", "valid", "ol", "settling", "fault", "uncal", "ac", "dc", "acdc",
+			"min", "max", "bar", "barrange", "function", "range", "ranges", "auto", "hold", "rel",
+		};
+		return k;
+	}
 
 	iMeter&     _m;
 	uint8_t     _digits;
