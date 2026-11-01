@@ -9,3 +9,5 @@ Release/
 *.list
 # CubeIDE workspace state
 .metadata/
+# Host test binaries
+hy3131/test/hy3131_test
