@@ -109,6 +109,7 @@ not by copying the app's code.
 | `inc/Gw121Calibration.h` | `StockCalibration`: the factory calibration, read-only, from the data EEPROM (`MappedEeprom`) |
 | `inc/Gw121Paths.h` | The stock firmware's switch rules (`pathLevels()`), and `Paths<TGpio>`, an `iMeterPaths` |
 | `inc/Gw121RangeSwitch.h` | Rotary switch debounce (as the stock firmware: 5 equal samples, then 15 locked), position → function, MODE order |
+| `inc/Gw121Bluetooth.h` | The Bluetooth protocol, so EEVblog's app works with our firmware. It encodes the 56-byte packet, decodes it back, builds it from a `meter::Reading` (`frameOf()`), and parses the phone's key and clock messages, with the echo. Written from the format, which is documented in the header |
 | `inc/Gw121L1Gpio.h` | The pins above, for the STM32L1 |
 | `tools/gen_gw121.py` | Regenerates the two generated headers from a 121gw-re checkout |
 
@@ -148,5 +149,6 @@ flagged `kUncal`.
   * Keys, buzzer, backlight, battery.
   * RTC (NJU6350).
   * SD card (FAT, logging).
-  * Bluetooth packets.
+  * Bluetooth: the codec is done. Still to do: the UART link, the bargraph
+    field, and the sub fields (temperature, Hz, VA).
   * Power control (PWR_CTL, PWR_CTL2).

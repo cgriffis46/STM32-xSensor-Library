@@ -12,6 +12,7 @@
 #include "Gw121Calibration.h"
 #include "Gw121Paths.h"
 #include "Gw121RangeSwitch.h"
+#include "Gw121Bluetooth.h"
 #include "SimHy3131.h"
 
 using namespace meter;
@@ -135,6 +136,78 @@ static void testRangeSwitch() {
 	CHECK(schematic.poll(&p) && p == Position::MicroAmps);
 }
 
+static void testBluetooth() {
+	printf("Bluetooth: packet as the app reads it, checksum, keys, clock\n");
+	Reading r{};
+	r.function = Function::DcVolts;
+	r.range = 0;
+	r.value = -1.234f;
+	r.status = kValid | kAutoRange | kRelative;
+	bt::MeterState st;
+	st.calYearMonth = 1712;
+	st.serial = 4321;
+	bt::Frame f = bt::frameOf(r, st);
+	uint8_t pkt[bt::kPacketLen];
+	CHECK(bt::encode(f, pkt) == 56);
+	CHECK(pkt[0] == 0xF2 && pkt[54] == '\r' && pkt[55] == '\n');
+	// The app drops 0xF2 and reads 52 characters: its index n is our n + 1.
+	const char* s = (const char*)pkt + 1;
+	CHECK(memcmp(s, "1712", 4) == 0);          // year 2017, month 12
+	CHECK(memcmp(s + 4, "04321", 5) == 0);     // serial
+	CHECK(memcmp(s + 9, "01", 2) == 0);        // mode DCV
+	CHECK(s[11] == '4' && s[12] == '0');       // negative, range 0
+	CHECK(memcmp(s + 13, "3034", 4) == 0);     // 12340 digits of 100 uV
+	CHECK(memcmp(s + 29, "0E", 2) == 0);       // status 1: DC, auto, APO on
+	uint8_t ck = 0;
+	for (int i = 10; i < 52; i += 2) {
+		auto h = [](uint8_t c) { return c <= '9' ? c - '0' : c - 'A' + 10; };
+		ck ^= (uint8_t)((h(pkt[i]) << 4) | h(pkt[i + 1]));
+	}
+	char want[3]; snprintf(want, sizeof want, "%02X", ck);
+	CHECK(pkt[52] == (uint8_t)want[0] && pkt[53] == (uint8_t)want[1]);
+	bt::Frame back;
+	CHECK(bt::decode(pkt, &back));
+	CHECK(back.mode == 1 && back.digits == 12340 && back.negative && !back.overload && back.serial == 4321);
+	CHECK(back.status2 & bt::kS2Rel);
+	pkt[16] ^= 1;                               // corrupt a digit
+	CHECK(!bt::decode(pkt, &back));
+
+	r.status = kOverload;                       // OL
+	f = bt::frameOf(r, st);
+	CHECK(f.overload && f.digits == 0);
+	r.function = Function::Ohms; r.range = 2; r.value = 4700.0f; r.status = kValid;
+	f = bt::frameOf(r, st);
+	CHECK(f.mode == 9 && f.range == 2 && f.digits == 47000);   // 5 kohm range: 0.1 ohm digits
+
+	bt::Parser p;
+	bt::Command c;
+	const uint8_t junk[] = { 0x00, 'x', 0x55 };
+	for (uint8_t b : junk) CHECK(!p.feed(b, &c));
+	uint8_t key[5];
+	bt::encodeKey(bt::Key::Mode, false, key);
+	CHECK(memcmp(key, "\xF4" "0505", 5) == 0);
+	bool got = false;
+	for (uint8_t b : key) got = p.feed(b, &c);
+	CHECK(got && c.kind == bt::Command::Kind::Key && c.key == bt::Key::Mode && !c.longPress);
+	CHECK(p.echoLen() == 5 && memcmp(p.echo(), key, 5) == 0);
+	const uint8_t longRange[] = { 0xF4, '8', '1', '8', '1' };
+	for (uint8_t b : longRange) got = p.feed(b, &c);
+	CHECK(got && c.key == bt::Key::Range && c.longPress);
+	const uint8_t bad[] = { 0xF4, '0', '1', '0', '2' };
+	for (uint8_t b : bad) got = p.feed(b, &c);
+	CHECK(!got);
+	// clock: 24-03-15 12:34:56, checksum the XOR
+	const uint8_t v[6] = { 24, 3, 15, 12, 34, 56 };
+	uint8_t t[15]; t[0] = 0xF8; uint8_t x = 0;
+	for (int i = 0; i < 6; i++) { snprintf((char*)t + 1 + 2 * i, 3, "%02X", v[i]); x ^= v[i]; }
+	char cs[3]; snprintf(cs, 3, "%02X", x); t[13] = cs[0]; t[14] = cs[1];
+	for (uint8_t b : t) got = p.feed(b, &c);
+	CHECK(got && c.kind == bt::Command::Kind::Time && c.year == 24 && c.minute == 34 && c.second == 56);
+	t[14] ^= 1;
+	for (uint8_t b : t) got = p.feed(b, &c);
+	CHECK(!got);
+}
+
 // ---- end to end ----
 
 using namespace hy3131sim;
@@ -204,6 +277,7 @@ int main() {
 	testCalibration();
 	testPaths();
 	testRangeSwitch();
+	testBluetooth();
 	testEndToEnd();
 	if (g_failures) { printf("%d FAILED\n", g_failures); return 1; }
 	printf("all passed\n");
