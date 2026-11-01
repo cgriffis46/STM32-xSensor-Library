@@ -58,13 +58,17 @@ struct Hy3131Route {
 	void       (*build)(hy3131::Config& cfg);
 	Hy3131Source source;
 	uint8_t      settle;    // results thrown away after the change
+	uint8_t      average;   // results averaged into one reading (0 or 1: none)
 };
 
 template <typename TDmm>
 class Hy3131FrontEnd : public iMeterFrontEnd, public hy3131::iListener {
 public:
-	Hy3131FrontEnd(TDmm& dmm, const Hy3131Route* routes, uint8_t count, uint32_t sysclkHz = hy3131::kXtalHz)
-		: _dmm(dmm), _routes(routes), _count(count), _sysclkHz(sysclkHz) {
+	// paths: the board's switches outside the HY3131, set before each
+	// reconfiguration (optional).
+	Hy3131FrontEnd(TDmm& dmm, const Hy3131Route* routes, uint8_t count, uint32_t sysclkHz = hy3131::kXtalHz,
+	               iMeterPaths* paths = nullptr)
+		: _dmm(dmm), _routes(routes), _count(count), _sysclkHz(sysclkHz), _paths(paths) {
 		_dmm.setListener(this);
 	}
 
@@ -88,6 +92,11 @@ public:
 		return rt ? rt->settle : 1;
 	}
 
+	uint8_t averageResults(Function f, uint8_t r) const override {
+		const Hy3131Route* rt = find(f, r);
+		return (rt && rt->average > 1) ? rt->average : 1;
+	}
+
 	bool select(Function f, uint8_t r, uint8_t tag) override {
 		const Hy3131Route* rt = find(f, r);
 		if (!rt) return false;
@@ -97,6 +106,7 @@ public:
 		if (cfg.inte == 0) cfg.inte = interruptFor(rt->source, cfg);
 		cfg.userTag = tag;
 		_routeOf[tag & 15u] = rt;
+		if (_paths) _paths->select(f, r);
 		return _dmm.start(cfg);
 	}
 
@@ -182,6 +192,7 @@ private:
 	const Hy3131Route* _routes;
 	uint8_t            _count;
 	uint32_t           _sysclkHz;
+	iMeterPaths*       _paths;
 
 	// Which route each tag selected. Written in select() before start(),
 	// read in onRunning() after the dmm has taken that start().

@@ -12,6 +12,7 @@
  *                      the HY3131 with a board's route table).
  *    iCalibrationStore where per-range calibration lives (EEPROM, flash, a
  *                      file on the SD card).
+ *    iMeterPaths       the board's switches outside the front-end chip.
  *    iMeterListener    told of each reading, in the meter's thread.
  *
  *  Values are SI, in float: a 50,000 count reading needs 17 bits and float
@@ -146,6 +147,19 @@ public:
 	// Results to throw away after select() before trusting one (the
 	// input network settles, filters fill). Per function and range.
 	virtual uint8_t settleResults(Function f, uint8_t range) const { (void)f; (void)range; return 1; }
+
+	// Results averaged into one reading (an overload is shown at once).
+	virtual uint8_t averageResults(Function f, uint8_t range) const { (void)f; (void)range; return 1; }
+};
+
+// The board's own signal paths outside the front-end chip: analog
+// multiplexers, relays, a filter, a test-voltage supply. Set for each
+// function and range before the front end is reconfigured. (The 121GW:
+// HEF4052/4053 switches on MCU GPIOs, see boards/gw121/Gw121Paths.h.)
+class iMeterPaths {
+public:
+	virtual ~iMeterPaths() = default;
+	virtual void select(Function f, uint8_t range) = 0;
 };
 
 class iCalibrationStore {

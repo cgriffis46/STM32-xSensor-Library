@@ -11,8 +11,10 @@ CMSIS-RTOS2.
 | Folder | What | Test |
 |--------|------|------|
 | [`isensor/hy3131/`](isensor/hy3131/README.md) | HY3131 / HY3130 DMM front-end driver: `hy3131_dmm<TTransport>`, `xhy3131` | `make -C staging/isensor/hy3131/test test` |
+| `itransport/inc/` | `BitBangSpiBlockTransport<TPins>`: SPI mode 0 on four GPIOs (the 121GW's HY3131 is on PF0..PF3, which have no SPI) | `make -C staging/itransport/test test` |
 | `itransport/hw/stm32l1/` | STM32L1 SPI: `Stm32L1SpiPort` (register level, interrupt per byte, no HAL SPI) and `Stm32L1SpiBlockTransport<TBus>` | `make -C staging/itransport/hw/stm32l1/test test` (and `cross`) |
 | `imeter/` | The meter layer: `iMeter`, `iMeterFrontEnd`, `iCalibrationStore`, `iMeterListener`; `meter::Meter` / `xMeter`; `Hy3131FrontEnd<TDmm>` | `make -C staging/imeter/test test` |
+| [`boards/gw121/`](boards/gw121/README.md) | The EEVblog 121GW: HY3131 range images and nominal scale, factory calibration from EEPROM, analog switch rules, rotary switch, pins | `make -C staging/boards/gw121/test test` |
 | `cross/` | The stack instantiated for the STM32L152xD, compiled with `arm-none-eabi-g++` (size check, nothing linked) | `make -C staging/cross cross` |
 
 The cross builds need ST's `cmsis_device_l1` headers:
@@ -35,10 +37,12 @@ CMSIS-RTOS2) is taken from the MCP2515 example in this repository.
               |  hy3131::Config, hy3131::iListener
         hy3131_dmm (xhy3131)   -- reset, configure, verify, IRQ / poll service, fault recovery
               |  iBlockTransport
-   Stm32L1SpiBlockTransport<FreeRtosTransport<SpiBlockTransport>>
-              |  BusTransport::onTransferComplete(SPI2, ...)
-        Stm32L1SpiPort (SPI2_IRQHandler)
+   Stm32L1SpiBlockTransport<...>  (an SPI peripheral)   or   BitBangSpiBlockTransport<Stm32L1GpioSpiPins>  (GPIO: the 121GW)
 ```
+
+On the 121GW, `Hy3131FrontEnd` also sets the board's analog switches
+(`iMeterPaths`: `gw121::Paths`), and `Meter` reads the factory calibration
+(`iCalibrationStore`: `gw121::StockCalibration`).
 
 Each layer only knows the interface below it. Another meter chip needs its
 own front end, another MCU its own transport, another RTOS its own `x...`
@@ -64,20 +68,17 @@ wrapper. Bare metal uses the base classes and polling.
 * `Reading::status` carries `kValid`, `kOverload` (OL), `kAutoRange`,
   `kSettling`, `kUncal`, `kHold`, `kRelative` and `kFault`.
 
-## What's missing, and waits on the 121GW schematic
+## What's missing
 
-* **The route table.** Which HY3131 switches, multiplexers and gains make
-  each range, and the scale of each. `Hy3131FrontEnd`'s comment shows the
-  form. The test's two-range DC volts table stands in for it.
-* **An `iCalibrationStore`** where the meter keeps its constants.
+* **The rest of the 121GW.** See [`boards/gw121/`](boards/gw121/README.md).
 * **Range changes go through a chip reset** (`hy3131_dmm::start()`), which
   costs tens of ms. A reconfigure path without the reset is the next
   improvement to the driver.
 * `hy3131_dmm::start()` copies the new configuration without a lock. Don't
   call it from two threads at once. `Meter` only calls it from its own
   thread.
-* **No DMA on the L1 port yet.** One interrupt per byte suits the HY3131
-  (24 bytes at most). An SD card or a W5500 will want DMA.
+* **No DMA on the L1 port yet.** An SD card or a W5500 will want DMA. The
+  121GW's SD card is on SDIO anyway.
 * **The L1 port is checked against fake registers and compiles against ST's
   headers.** It has not run on an L1. To do on a board, with a logic
   analyser:

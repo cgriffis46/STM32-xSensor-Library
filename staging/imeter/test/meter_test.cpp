@@ -44,6 +44,8 @@ struct FakeFrontEnd : iMeterFrontEnd {
 		return nullptr;
 	}
 	uint8_t settleResults(Function, uint8_t) const override { return settle; }
+	uint8_t average = 1;
+	uint8_t averageResults(Function, uint8_t) const override { return average; }
 	bool select(Function f, uint8_t r, uint8_t t) override {
 		if (refuse > 0) { refuse--; return false; }
 		if (leakOld && selected) { produce(); }   // a result of the old setting, still in the pipe
@@ -259,6 +261,30 @@ static void testFault() {
 	CHECK((r.status & kValid) && !(r.status & kFault));
 }
 
+static void testAveraging() {
+	printf("averaging: four results to a reading; overload at once\n");
+	FakeFrontEnd fe;
+	Meter m(fe);
+	L l; m.setListener(&l);
+	fe.average = 4;
+	fe.vin = 1.0f;
+	m.setFunction(Function::DcVolts);
+	m.setRange(1);
+	m.main(0);                                   // select
+	const int before = l.readings;
+	const float v[4] = { 1.0f, 1.2f, 1.0f, 1.2f };
+	for (int i = 0; i < 4; i++) { fe.vin = v[i]; step(m, fe, 1); }
+	CHECK(l.readings == before + 1);
+	Reading r;
+	m.latest(&r);
+	CHECK((r.status & kValid) && near(r.value, 1.1f, 1e-4f));
+	fe.vin = 1.0f; step(m, fe, 1);                // one into the next average
+	fe.vin = 9.0f; step(m, fe, 1);                // overload on 5 V: shown now
+	m.latest(&r);
+	CHECK(r.status & kOverload);
+	CHECK(l.readings == before + 2);
+}
+
 // ---- end to end: Meter, Hy3131FrontEnd, hy3131_dmm, the simulated chip ----
 
 using namespace hy3131sim;
@@ -268,8 +294,8 @@ using Dmm = hy3131_dmm<SimTransport>;
 static void dcvHigh(hy3131::Config& c) { c.ad1Input(1); c.field(hy3131::kR25, 3, hy3131::kR25Ad1igShift, 0); }   // x0.9
 static void dcvLow(hy3131::Config& c)  { c.ad1Input(1); c.field(hy3131::kR25, 3, hy3131::kR25Ad1igShift, 3); }   // x3.6
 static const Hy3131Route kRoutes[] = {
-	{ Function::DcVolts, 0, { 1.0f, 1.0f / 40000.0f, 0, Unit::Volt, 5, "1V" }, dcvLow,  Hy3131Source::Ad1, 1 },
-	{ Function::DcVolts, 1, { 4.0f, 1.0f / 10000.0f, 0, Unit::Volt, 4, "4V" }, dcvHigh, Hy3131Source::Ad1, 1 },
+	{ Function::DcVolts, 0, { 1.0f, 1.0f / 40000.0f, 0, Unit::Volt, 5, "1V" }, dcvLow,  Hy3131Source::Ad1, 1, 1 },
+	{ Function::DcVolts, 1, { 4.0f, 1.0f / 10000.0f, 0, Unit::Volt, 4, "4V" }, dcvHigh, Hy3131Source::Ad1, 1, 1 },
 };
 
 static void testEndToEnd() {
@@ -320,6 +346,7 @@ int main() {
 	testSettleStaleRefuse();
 	testCalHoldRelMinMax();
 	testFault();
+	testAveraging();
 	testEndToEnd();
 	if (g_failures) { printf("%d FAILED\n", g_failures); return 1; }
 	printf("all passed\n");

@@ -21,6 +21,8 @@
  *     on an unknown input.
  *   * After every select(), the front end's settleResults() results are
  *     thrown away, and so is any result tagged with an older selection.
+ *   * The front end's averageResults() results make one reading. An
+ *     overload doesn't wait for the rest.
  *   * Calibration per function and range, from an iCalibrationStore. Gain 1,
  *     offset 0 and kUncal without one.
  *   * Hold, relative (the next valid value becomes the zero), min / max.
@@ -93,6 +95,7 @@ private:
 	void beginSelect(uint32_t nowMs);
 	void loadCalibration();
 	void handleResult(const RawResult& r);
+	void averageResult(const RawResult& r);
 	void publishStatus(uint16_t status);
 	void publish(Reading& rd);
 
@@ -112,6 +115,9 @@ private:
 	uint32_t _lastSeq = 0;
 	uint32_t _nowMs = 0;
 	Calibration _calib = {1.0f, 0.0f, false};
+	uint8_t  _avgTarget = 1;
+	uint8_t  _avgCount = 0;
+	double   _avgSum = 0.0;      // double: 16 results of 3,000,000 counts lose digits in float
 
 	bool     _hold = false;
 	bool     _haveHeld = false;

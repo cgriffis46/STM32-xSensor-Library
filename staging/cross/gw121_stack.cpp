@@ -1,35 +1,44 @@
-// Compiled by staging/cross/Makefile only: the whole stack, instantiated
-// for the Cortex-M3 (STM32L152xD) the way a 121GW-style meter would use it.
-// It checks that the stack compiles and shows its size. It is not a firmware.
-#include "Stm32L1SpiBlockTransport.h"
-#include "FreeRtosTransport.h"
+// Compiled by staging/cross/Makefile only: the 121GW stack as it would be
+// wired on the meter, built for its STM32L152ZD (Cortex-M3). It checks that
+// everything compiles together and shows the size. It is not a firmware:
+// no clocks, no GPIO set-up, no threads.
+#include <new>
+#include "BitBangSpiBlockTransport.h"
+#include "Stm32L1GpioSpiPins.h"
 #include "xhy3131.h"
 #include "Hy3131FrontEnd.h"
 #include "xMeter.h"
+#include "Gw121Routes.h"
+#include "Gw121Calibration.h"
+#include "Gw121Paths.h"
+#include "Gw121L1Gpio.h"
+#include "Gw121RangeSwitch.h"
 
-using DmmSpi = Stm32L1SpiBlockTransport<FreeRtosTransport<SpiBlockTransport>>;
-using Dmm    = xhy3131<DmmSpi>;
+using HySpi = BitBangSpiBlockTransport<Stm32L1GpioSpiPins>;
+using Dmm   = xhy3131<HySpi>;
+using Fe    = meter::Hy3131FrontEnd<Dmm>;
 
-static void dcv(hy3131::Config& c) { c.ad1Input(1); }
-static const meter::Hy3131Route kRoutes[] = {
-	{ meter::Function::DcVolts, 0, { 5.0f, 1e-4f, 0, meter::Unit::Volt, 4, "5V" }, dcv, meter::Hy3131Source::Ad1, 1 },
-};
-
-static Stm32L1SpiPort spi2(SPI2);
 alignas(Dmm) static unsigned char dmmMem[sizeof(Dmm)];
-alignas(meter::Hy3131FrontEnd<Dmm>) static unsigned char feMem[sizeof(meter::Hy3131FrontEnd<Dmm>)];
+alignas(Fe) static unsigned char feMem[sizeof(Fe)];
 alignas(meter::xMeter) static unsigned char meterMem[sizeof(meter::xMeter)];
+static gw121::Paths<gw121::L1Gpio> paths;
+static gw121::MappedEeprom eeprom;
+static gw121::StockCalibration cal(eeprom);
+static gw121::RangeSwitch rangeSwitch;
+static Stm32L1GpioSpiPins doPins = gw121::hyPins();
 
-extern "C" void SPI2_IRQHandler(void) { spi2.irq(); }
-
-void gw121Start(osMutexId_t spi2Mutex) {
+void gw121Start() {
 	hy3131_param_t p = hy3131_default_param();
-	p.irq = true;
-	Dmm* dmm = new (dmmMem) Dmm(p, spi2, GPIOB, (uint16_t)(1u << 12), spi2Mutex);
-	auto* fe = new (feMem) meter::Hy3131FrontEnd<Dmm>(*dmm, kRoutes, 1);
-	auto* m  = new (meterMem) meter::xMeter(*fe);
-	m->setFunction(meter::Function::DcVolts);
+	p.doLevel = &Stm32L1GpioSpiPins::doLevelOf;   // the stock firmware polls DO (PF3) too
+	p.doCtx = &doPins;
+	Dmm* dmm = new (dmmMem) Dmm(p, gw121::hyPins());
+	Fe* fe = new (feMem) Fe(*dmm, gw121::kRoutes, gw121::kRouteCount, hy3131::kXtalHz, &paths);
+	new (meterMem) meter::xMeter(*fe, &cal);
 }
 void gw121DmmThread(uint32_t now)   { reinterpret_cast<Dmm*>(dmmMem)->main(now); }
 void gw121MeterThread(uint32_t now) { reinterpret_cast<meter::xMeter*>(meterMem)->main(now); }
-void gw121DoIrq()                   { reinterpret_cast<Dmm*>(dmmMem)->onIrq(); }
+void gw121Tick10ms() {
+	rangeSwitch.sample(gw121::rangeSwitchIdr());
+	gw121::Position pos;
+	if (rangeSwitch.poll(&pos)) reinterpret_cast<meter::xMeter*>(meterMem)->setFunction(gw121::firstFunction(pos));
+}

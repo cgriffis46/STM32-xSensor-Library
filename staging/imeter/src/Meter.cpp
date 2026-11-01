@@ -120,6 +120,10 @@ void Meter::main(uint32_t nowMs) {
 		if (!_fe.select(_fn, _range, (uint8_t)(_tag + 1))) { sleep(1); return; }
 		_tag = (uint8_t)(_tag + 1);
 		_settleLeft = _fe.settleResults(_fn, _range);
+		_avgTarget = _fe.averageResults(_fn, _range);
+		if (_avgTarget == 0) _avgTarget = 1;
+		_avgCount = 0;
+		_avgSum = 0.0;
 		_state = _settleLeft ? State::Settling : State::Measuring;
 		if (_listener) _listener->onFunctionChanged(_fn, _range, _auto);
 		publishStatus(kSettling);
@@ -139,7 +143,7 @@ void Meter::main(uint32_t nowMs) {
 				if (_settleLeft == 0) _state = State::Measuring;
 				continue;
 			}
-			handleResult(r);
+			averageResult(r);
 			if (_state != State::Measuring) break;   // ranging: select again first
 		}
 		if (_fe.faulted() && !_faultShown) {
@@ -151,6 +155,30 @@ void Meter::main(uint32_t nowMs) {
 		return;
 	}
 	}
+}
+
+// Over full scale goes straight through: OL, or auto range, needn't wait
+// for the rest of an average that is wrong anyway.
+void Meter::averageResult(const RawResult& r) {
+	const RangeSpec* spec = _fe.rangeSpec(_fn, _range);
+	bool over = r.overload;
+	if (spec && !over) {
+		const float olRaw = spec->overloadRaw > 0.0f ? spec->overloadRaw : spec->fullScale / spec->unitsPerRaw;
+		over = fabsf((r.raw - _calib.offset) * _calib.gain) >= olRaw;
+	}
+	if (_avgTarget <= 1 || over) {
+		_avgCount = 0;
+		_avgSum = 0.0;
+		handleResult(r);
+		return;
+	}
+	_avgSum += (double)r.raw;
+	if (++_avgCount < _avgTarget) return;
+	RawResult avg = r;
+	avg.raw = (float)(_avgSum / _avgCount);
+	_avgCount = 0;
+	_avgSum = 0.0;
+	handleResult(avg);
 }
 
 void Meter::handleResult(const RawResult& r) {

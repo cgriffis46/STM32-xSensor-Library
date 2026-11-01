@@ -65,6 +65,12 @@ Results are published two ways:
   * With the counter on, peak hold is read only together with the counter.
 
   The simulated chip in the test treats partial reads the same way.
+
+  The EEVblog 121GW's stock firmware confirms the extra clock. It bit-bangs
+  the HY3131 and gives exactly one clock between the read command and the
+  data (121gw-re, `send_byte_to_hy3131()`). Bit-banged
+  (`BitBangSpiBlockTransport`), the extra byte still costs only the 7
+  trailing clocks.
 * **Reset and oscillator timing.** The datasheet gives no time for either. The
   driver waits 10 ms after the reset and 20 ms after starting the oscillator.
 * **Power-on register values.** These aren't given either. The driver always
