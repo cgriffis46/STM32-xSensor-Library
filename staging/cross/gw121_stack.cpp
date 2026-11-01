@@ -13,6 +13,10 @@
 #include "Gw121Paths.h"
 #include "Gw121L1Gpio.h"
 #include "Gw121RangeSwitch.h"
+#include "Gw121Lcd.h"
+#include "Gw121Bluetooth.h"
+#include "MeterTags.h"
+#include "Stm32L1Lcd.h"
 
 using HySpi = BitBangSpiBlockTransport<Stm32L1GpioSpiPins>;
 using Dmm   = xhy3131<HySpi>;
@@ -41,4 +45,34 @@ void gw121Tick10ms() {
 	rangeSwitch.sample(gw121::rangeSwitchIdr());
 	gw121::Position pos;
 	if (rangeSwitch.poll(&pos)) reinterpret_cast<meter::xMeter*>(meterMem)->setFunction(gw121::firstFunction(pos));
+}
+
+// The LCD as an HMI: the meter's tags and the board's, on the glass.
+static idisplay::Stm32L1Lcd glassLcd;
+static gw121::LcdLayout layout;
+static bool btOn = true, battLow = false;
+alignas(meter::MeterTags) static unsigned char tagsMem[sizeof(meter::MeterTags)];
+struct BoardTags : idisplay::iTagSource {
+	int32_t find(const char* n) override { return n[0] == 'b' && n[1] == 't' ? 0 : (n[0] == 'b' ? 1 : -1); }
+	bool read(int32_t h, idisplay::xTagValue& o) override { o = idisplay::xTagValue::boolean(h == 0 ? btOn : battLow); return true; }
+};
+static BoardTags boardTags;
+static idisplay::iTagSource* tagSources[2];
+alignas(idisplay::xTagChain) static unsigned char chainMem[sizeof(idisplay::xTagChain)];
+alignas(idisplay::xSegmentHmi) static unsigned char hmiMem[sizeof(idisplay::xSegmentHmi)];
+
+void gw121LcdStart() {
+	glassLcd.start(idisplay::Stm32L1Lcd::Config{});
+	tagSources[0] = new (tagsMem) meter::MeterTags(*reinterpret_cast<meter::xMeter*>(meterMem));
+	tagSources[1] = &boardTags;
+	auto* chain = new (chainMem) idisplay::xTagChain(tagSources, 2);
+	new (hmiMem) idisplay::xSegmentHmi(glassLcd, *chain, layout.fields(), layout.count());
+}
+void gw121LcdTick() { reinterpret_cast<idisplay::xSegmentHmi*>(hmiMem)->refresh(); }
+
+// A Bluetooth packet of the latest reading, for the UART.
+size_t gw121BtPacket(uint8_t* out) {
+	meter::Reading r;
+	if (!reinterpret_cast<meter::xMeter*>(meterMem)->latest(&r)) return 0;
+	return gw121::bt::encode(gw121::bt::frameOf(r, gw121::bt::MeterState{}), out);
 }

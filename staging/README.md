@@ -14,6 +14,8 @@ CMSIS-RTOS2.
 | `itransport/inc/` | `BitBangSpiBlockTransport<TPins>`: SPI mode 0 on four GPIOs (the 121GW's HY3131 is on PF0..PF3, which have no SPI) | `make -C staging/itransport/test test` |
 | `itransport/hw/stm32l1/` | STM32L1 SPI: `Stm32L1SpiPort` (register level, interrupt per byte, no HAL SPI) and `Stm32L1SpiBlockTransport<TBus>` | `make -C staging/itransport/hw/stm32l1/test test` (and `cross`) |
 | `imeter/` | The meter layer: `iMeter`, `iMeterFrontEnd`, `iCalibrationStore`, `iMeterListener`; `meter::Meter` / `xMeter`; `Hy3131FrontEnd<TDmm>` | `make -C staging/imeter/test test` |
+| `idisplay/segment/` | A segment LCD as an HMI. Each part of the glass is a field bound to tags read through `idisplay::iTagSource`: `NumberField` (7-segment digits, point, minus), `IconField`, `BarField`, `ChoiceField`. `xSegmentHmi` draws them and writes the LCD only when the frame changes. `xTagChain` joins tag sources | `make -C staging/idisplay/segment/test test` |
+| `idisplay/hw/stm32l1/` | `Stm32L1Lcd`: the STM32L1's LCD controller as an `iSegmentLcd`, register level and non-blocking | `make -C staging/idisplay/hw/stm32l1/test test` |
 | [`boards/gw121/`](boards/gw121/README.md) | The EEVblog 121GW: HY3131 range images and nominal scale, factory calibration from EEPROM, analog switch rules, rotary switch, pins | `make -C staging/boards/gw121/test test` |
 | `cross/` | The stack instantiated for the STM32L152xD, compiled with `arm-none-eabi-g++` (size check, nothing linked) | `make -C staging/cross cross` |
 
@@ -38,6 +40,16 @@ CMSIS-RTOS2) is taken from the MCP2515 example in this repository.
         hy3131_dmm (xhy3131)   -- reset, configure, verify, IRQ / poll service, fault recovery
               |  iBlockTransport
    Stm32L1SpiBlockTransport<...>  (an SPI peripheral)   or   BitBangSpiBlockTransport<Stm32L1GpioSpiPins>  (GPIO: the 121GW)
+```
+
+On the display side, `meter::MeterTags` publishes the meter as tags
+(`meter.value`, `meter.unit`, `meter.hold`, ...). The control tags are
+writable and drive the meter. `xSegmentHmi` shows those tags on the glass,
+and the same tags can feed a PLC tag server, the shell or a web page:
+
+```
+   meter::Meter --> meter::MeterTags --+
+   board tags (xTagTable, PLC tags) ---+--> xTagChain --> xSegmentHmi (gw121::LcdLayout) --> Stm32L1Lcd
 ```
 
 On the 121GW, `Hy3131FrontEnd` also sets the board's analog switches
