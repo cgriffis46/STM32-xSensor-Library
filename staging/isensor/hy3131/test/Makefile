@@ -2,7 +2,7 @@
 # and DebugLog.h: taken from the MCP2515 example's copy of Claude-iTransport
 # unless ITRANSPORT points at another.
 
-ITRANSPORT ?= ../../STM32L476RG_MC2515_Example/STM32L476RG_MC2515_Example
+ITRANSPORT ?= ../../../../STM32L476RG_MC2515_Example/STM32L476RG_MC2515_Example
 CXX       ?= g++
 CXXFLAGS  ?= -std=c++17 -Wall -Wextra -Werror -O1 -g
 

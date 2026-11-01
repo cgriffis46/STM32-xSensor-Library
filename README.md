@@ -12,7 +12,7 @@ the ones it uses, recorded in its `iTransport/SOURCE.txt`.
 | [`gps-clock-f207/`](gps-clock-f207/README.md) | NUCLEO-F207ZG + X-NUCLEO-GNSS2A1 | GPS clock and NTP server on the board's own Ethernet |
 | [`gps-clock-f405/`](gps-clock-f405/README.md) | Adafruit Feather STM32F405 | GPS clock and NTP server on a W5500, with an OLED |
 | [`STM32L476RG_MC2515_Example/`](STM32L476RG_MC2515_Example/README.md) | NUCLEO-L476RG + SparkFun CAN-BUS shield | Sends the shield's joystick over CAN (MCP2515, 500 kbit/s), for an L432KC with an OLED to show |
-| [`hy3131/`](hy3131/README.md) | any (SPI) | Driver for the Hycon HY3131 / HY3130 DMM front end, staged here until it moves to Claude-iTransport. Host-tested, not yet run on a chip |
+| [`staging/`](staging/README.md) | STM32L152 (121GW-class meter) | Drivers on their way to Claude-iTransport: HY3131 DMM front end, STM32L1 SPI transport, and the iMeter layer (auto range, calibration, hold, REL). Host-tested and cross-compiled, not yet run on hardware |
 
 ## The old examples
 

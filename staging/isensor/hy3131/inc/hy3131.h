@@ -93,6 +93,7 @@ struct Config {
 	uint8_t  reg[kCfgCount];       // 0x20..0x36 (0x20..0x33 on the HY3130)
 	uint8_t  inte;                 // INTE: which flags raise DO
 	uint32_t gateCycles;           // the counter's gate in SYSCLK cycles (with ENCTR), 256..16,776,960
+	uint32_t userTag;              // not the chip's: carried along, so config() says which request is running
 
 	uint8_t& r(uint8_t addr) { return reg[cfgIndex(addr)]; }
 	uint8_t  r(uint8_t addr) const { return reg[cfgIndex(addr)]; }

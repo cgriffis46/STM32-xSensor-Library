@@ -17,7 +17,7 @@ chip.** Tested on the host against a simulated chip (`test/`).
 | `inc/Hy3131Regs.h` | Registers, bits, SPI framing, value decoding |
 | `inc/hy3131.h`, `src/hy3131.tpp` | `hy3131_dmm<TTransport>`, `hy3131::Config`, `Sample`, `Count`, `iListener` |
 | `inc/xhy3131.h` | The CMSIS-RTOS2 version: sleeps on a thread flag, `onIrq()` wakes it |
-| `test/` | `make -C hy3131/test test` |
+| `test/` (with `SimHy3131.h`, the simulated chip) | `make -C staging/isensor/hy3131/test test` |
 
 ## Using it
 
