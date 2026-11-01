@@ -17,6 +17,7 @@
 #include "Gw121Bluetooth.h"
 #include "MeterTags.h"
 #include "Stm32L1Lcd.h"
+#include "Gw121Keys.h"
 
 using HySpi = BitBangSpiBlockTransport<Stm32L1GpioSpiPins>;
 using Dmm   = xhy3131<HySpi>;
@@ -75,4 +76,25 @@ size_t gw121BtPacket(uint8_t* out) {
 	meter::Reading r;
 	if (!reinterpret_cast<meter::xMeter*>(meterMem)->latest(&r)) return 0;
 	return gw121::bt::encode(gw121::bt::frameOf(r, gw121::bt::MeterState{}), out);
+}
+
+// Keys and buzzer: sampled every 10 ms, the buzzer ticked every 1 ms;
+// a key becomes tag writes, as a PLC's or the phone's would.
+static idisplay::KeyScanner keys(gw121::keyConfig());
+static idisplay::Buzzer<gw121::BuzzerPin> buzzer;
+alignas(gw121::Controller) static unsigned char ctlMem[sizeof(gw121::Controller)];
+static gw121::bt::Parser btParser;
+
+void gw121KeysStart() {
+	new (ctlMem) gw121::Controller(*reinterpret_cast<idisplay::xTagChain*>(chainMem), &buzzer);
+}
+void gw121Tick1ms(uint32_t now) { buzzer.tick(now); }
+void gw121KeysTick10ms() { keys.sample(gw121::keysFromIdr(gw121::keysIdr())); }
+void gw121KeysPoll() {
+	idisplay::KeyEvent e;
+	if (keys.poll(&e)) reinterpret_cast<gw121::Controller*>(ctlMem)->onKey(e);
+}
+void gw121BtByte(uint8_t b) {
+	gw121::bt::Command c;
+	if (btParser.feed(b, &c)) reinterpret_cast<gw121::Controller*>(ctlMem)->onBluetooth(c);
 }

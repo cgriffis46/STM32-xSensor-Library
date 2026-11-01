@@ -10,6 +10,7 @@
 #include "Gw121Routes.h"
 #include "MeterTags.h"
 #include "FakeTags.h"
+#include "Gw121Keys.h"
 
 using namespace gw121;
 using namespace idisplay;
@@ -196,11 +197,60 @@ static void testFormats() {
 	CHECK(meter::displayFormat(v1000).prefix == 0 && meter::displayFormat(v1000).decimals == 1);
 }
 
+struct FakeBeeper : iBeeper {
+	int oks = 0, nos = 0, last = 0;
+	void beep(uint16_t onMs, uint8_t count, uint16_t) override { if (onMs == 50 && count == 2) { nos++; last = -1; } else { oks++; last = 1; } }
+	void stop() override {}
+	bool beeping() const override { return false; }
+};
+
+static void testKeys() {
+	printf("keys: pins, and what they do through the meter's tags\n");
+	CHECK(keysFromIdr(0xFFFF) == 0);
+	CHECK(keysFromIdr((uint16_t)~(1u << 12)) == kKeyRange);   // PG12
+	CHECK(keysFromIdr((uint16_t)~(1u << 8)) == kKeyMode);     // PG8
+	CHECK(keysFromIdr((uint16_t)~((1u << 13) | (1u << 11))) == (kKeyHold | kKeyMem));
+
+	FakeMeter m;
+	meter::MeterTags tags(m);
+	FakeBeeper beep;
+	Controller c(tags, &beep);
+	auto press = [&](uint16_t k, bool longPress = false) {
+		KeyEvent e; e.keys = k; e.action = longPress ? KeyEvent::Action::Held : KeyEvent::Action::Pressed;
+		m.asked.clear();
+		return c.onKey(e);
+	};
+	m.show(Function::DcVolts, 1, 12.0f, meter::kValid | meter::kAutoRange);
+	CHECK(press(kKeyRange) && m.asked.size() == 1 && m.asked[0] == "auto off" && beep.last == 1);
+	m.show(Function::DcVolts, 1, 12.0f, meter::kValid);
+	CHECK(press(kKeyRange) && m.asked[0] == "range 2");
+	m.show(Function::DcVolts, 3, 12.0f, meter::kValid);
+	CHECK(press(kKeyRange) && m.asked[0] == "range 0");             // wraps
+	CHECK(press(kKeyRange, true) && m.asked[0] == "auto on");
+	CHECK(press(kKeyHold) && m.asked[0] == "hold on");
+	m.show(Function::DcVolts, 3, 12.0f, meter::kValid | meter::kHold);
+	CHECK(press(kKeyHold) && m.asked[0] == "hold off");
+	CHECK(press(kKeyRel) && m.asked[0] == "rel on");
+	c.setPosition(Position::Volts);
+	CHECK(press(kKeyMode) && m.asked[0] == "function 2");           // DC V -> AC V
+	c.setPosition(Position::Ohms);
+	m.show(Function::Ohms, 2, 100.0f, meter::kValid);
+	CHECK(press(kKeyMode) && m.asked[0] == "function 8");           // ohms -> continuity
+	const int nos = beep.nos;
+	CHECK(!press(kKeyPeak) && m.asked.empty() && beep.nos == nos + 1);   // not yet: "no"
+	CHECK(!press(kKeyHold, true));
+	// The phone's keys take the same path.
+	bt::Command cmd; cmd.kind = bt::Command::Kind::Key; cmd.key = bt::Key::Rel; cmd.longPress = false;
+	m.asked.clear();
+	CHECK(c.onBluetooth(cmd) && m.asked[0] == "rel on");
+}
+
 int main() {
 	testGlass();
 	testLayoutCoverage();
 	testMeterOnGlass();
 	testFormats();
+	testKeys();
 	if (g_failures) { printf("%d FAILED\n", g_failures); return 1; }
 	printf("all passed\n");
 	return 0;

@@ -23,6 +23,7 @@
  *    meter.barrange   full scale as 0: 5, 1: 50, 2: 500, 3: 1000           read
  *    meter.function   meter::Function                                      read, write
  *    meter.range      the range index                                      read, write
+ *    meter.ranges     how many ranges the function has                     read
  *    meter.auto       auto range                                           read, write
  *    meter.hold       hold                                                 read, write
  *    meter.rel        relative                                             read, write
@@ -78,7 +79,7 @@ class MeterTags : public idisplay::iTagSource {
 public:
 	enum Tag : int32_t {
 		Value, Si, Decimals, Prefix, UnitTag, Valid, Ol, Settling, Fault, Uncal, Ac, Dc, AcDc,
-		Min, Max, Bar, BarRange, FunctionTag, Range, Auto, Hold, Rel, kCount
+		Min, Max, Bar, BarRange, FunctionTag, Range, Ranges, Auto, Hold, Rel, kCount
 	};
 
 	explicit MeterTags(iMeter& m, uint8_t displayDigits = 5, const char* prefix = "meter.")
@@ -119,6 +120,7 @@ public:
 		case BarRange:    out = xTagValue::num(d.barRange); return true;
 		case FunctionTag: out = xTagValue::num((double)(uint8_t)r.function); return true;
 		case Range:       out = xTagValue::num(r.range); return true;
+		case Ranges:      out = xTagValue::num(r.function != Function::None ? _m.rangeCount(r.function) : 0); return true;
 		case Auto:        out = xTagValue::boolean((r.status & kAutoRange) != 0); return true;
 		case Hold:        out = xTagValue::boolean((r.status & kHold) != 0); return true;
 		case Rel:         out = xTagValue::boolean((r.status & kRelative) != 0); return true;
@@ -154,7 +156,7 @@ private:
 
 	static constexpr const char* kNames[kCount] = {
 		"value", "si", "decimals", "prefix", "unit", "valid", "ol", "settling", "fault", "uncal", "ac", "dc", "acdc",
-		"min", "max", "bar", "barrange", "function", "range", "auto", "hold", "rel",
+		"min", "max", "bar", "barrange", "function", "range", "ranges", "auto", "hold", "rel",
 	};
 
 	iMeter&     _m;

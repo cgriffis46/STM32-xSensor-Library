@@ -8,8 +8,9 @@
  *      gw121::L1Gpio paths gpio;                       // Gw121Paths' TGpio
  *      Stm32L1GpioSpiPins hy = gw121::hyPins();        // BitBangSpiBlockTransport's TPins
  *
- *  All of these must be set up as GPIO (outputs, but HY_DO and the rotary
- *  switch's PG0..PG7, inputs with pull-ups as the stock firmware has them)
+ *  All of these must be set up as GPIO (outputs, but HY_DO, the rotary
+ *  switch's PG0..PG7 and the keys' PG8..PG15, inputs with pull-ups as the
+ *  stock firmware has them; the buzzer PE7 an output)
  *  before use. Clocks for GPIOA, C, D, E, F, G, H.
  */
 
@@ -52,6 +53,14 @@ struct L1Gpio {
 
 // The rotary switch's port (PG0..PG7): RangeSwitch::sample(rangeSwitchIdr()).
 inline uint16_t rangeSwitchIdr() { return (uint16_t)GPIOG->IDR; }
+
+// The keys (PG8..PG15, active low): KeyScanner::sample(keysFromIdr(keysIdr())).
+inline uint16_t keysIdr() { return (uint16_t)GPIOG->IDR; }
+
+// The buzzer, PE7 high to sound: idisplay::Buzzer<gw121::BuzzerPin>.
+struct BuzzerPin {
+	void set(bool on) { GPIOE->BSRR = on ? (1u << 7) : (1u << (7 + 16)); }
+};
 
 } // namespace gw121
 

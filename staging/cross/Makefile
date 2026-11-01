@@ -11,7 +11,7 @@ RTOS       ?= $(EX)/Middlewares/Third_Party/FreeRTOS/Source
 ARM_CXX    ?= arm-none-eabi-g++
 FLAGS = -mcpu=cortex-m3 -mthumb -std=c++17 -Os -Wall -Wextra -Werror -fno-exceptions -fno-rtti \
         -ffunction-sections -fdata-sections -DSTM32L152xD
-INC = -I../itransport/inc -I../itransport/hw/stm32l1/inc -I../boards/gw121/inc -I../idisplay/segment/inc -I../idisplay/hw/stm32l1/inc -I$(EX)/../../l432kc-sensor-bringup/l432kc-sensor-bringup/iDisplay/hmi/inc -I../isensor/hy3131/inc -I../imeter/inc \
+INC = -I../itransport/inc -I../itransport/hw/stm32l1/inc -I../boards/gw121/inc -I../idisplay/segment/inc -I../idisplay/input/inc -I../idisplay/hw/stm32l1/inc -I$(EX)/../../l432kc-sensor-bringup/l432kc-sensor-bringup/iDisplay/hmi/inc -I../isensor/hy3131/inc -I../imeter/inc \
       -I$(EX)/iTransport/inc -I$(EX)/iTransport/hw/freertos/inc -I$(EX)/isensor/inc \
       -I$(L1_DEVICE) -I$(CMSIS_CORE) -I$(RTOS)/CMSIS_RTOS_V2 -I$(RTOS)/include \
       -I$(RTOS)/portable/GCC/ARM_CM3 -I$(EX)/Core/Inc
