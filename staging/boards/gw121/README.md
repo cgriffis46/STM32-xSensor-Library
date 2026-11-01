@@ -25,6 +25,31 @@ data:
 None of the firmware's code is copied. Decide whether that is fine for your
 use before this leaves the branch.
 
+EEVblog's official repository,
+[EEVblog/EEVblog-121GW](https://github.com/EEVblog/EEVblog-121GW) (GPL-3.0,
+last changed December 2017), is the Bluetooth phone app (Xamarin, C#). It
+has no meter firmware and no schematic. It does document the Bluetooth
+protocol from the phone's side (`Controls/Multimeter/Packet121GW.cs`):
+
+* **Meter to phone:** a packet starts with `0xF2`, then 52 ASCII hex
+  digits, holding:
+  * the serial number and date (BCD)
+  * the mode
+  * the main and sub values, with range, sign and overload
+  * the bargraph
+  * three status bytes
+* **Phone to meter:** key presses, `0xF4` then four ASCII bytes. RANGE is
+  `F4 30 31 30 31`, through SETUP `F4 30 38 30 38`. A long press starts
+  `F4 38`.
+* **Its mode numbers** (`eMode`: Low Z 0, DCV 1, ACV 2 … DCVA 24) are the
+  stock firmware's `meter_meas_mode`, which `Gw121Routes.h`'s `StockMode`
+  uses for the calibration addresses. The official app and the decompiled
+  firmware agree.
+
+This repository is MIT and the app is GPL-3.0. Firmware of ours that talks
+to EEVblog's app should be written from that description of the format,
+not by copying the app's code.
+
 ## The hardware
 
 | Part | What | Notes |
