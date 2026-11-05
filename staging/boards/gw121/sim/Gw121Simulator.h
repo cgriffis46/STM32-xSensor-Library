@@ -6,7 +6,8 @@
  *  codec) on a simulated front end. Put it on any MCU with a BLE UART
  *  module (an Adafruit Bluefruit LE UART Friend, say), and a phone app or
  *  the Web Bluetooth page (staging/tools/web-bluetooth) sees a 121GW
- *  running our firmware: packets out, keys and the clock in.
+ *  running our firmware: packets out (one a second by default), keys and
+ *  the clock in.
  *
  *      Gw121Simulator sim(uart);            // uart: an iByteSink
  *      for every byte received:  sim.feed(b);
@@ -129,7 +130,11 @@ private:
 
 class Simulator {
 public:
-	static constexpr uint32_t kPacketMs = 250;
+	// One packet a second by default. A BLE UART module forwards what it
+	// gets only as fast as the link allows, and a PC usually allows less
+	// than a phone: at 4 a second (224 bytes/s) an Adafruit UART Friend
+	// without flow control dropped most of them on the way to Chrome on a PC.
+	static constexpr uint32_t kDefaultPacketMs = 1000;
 
 	explicit Simulator(iByteSink& out, uint32_t serial = 12345, uint16_t calYearMonth = 2611)
 		: _out(out), _meter(_fe), _tags(_meter), _ctl(_tags) {
@@ -162,7 +167,7 @@ public:
 	void main(uint32_t nowMs) {
 		_fe.tick(nowMs);
 		_meter.main(nowMs);
-		if (nowMs - _lastPacketMs < kPacketMs) return;
+		if (nowMs - _lastPacketMs < _packetMs) return;
 		meter::Reading r;
 		if (!_meter.latest(&r)) return;
 		_lastPacketMs = nowMs;
@@ -171,6 +176,10 @@ public:
 		_out.write(pkt, sizeof pkt);
 		_packets++;
 	}
+
+	// How often a packet goes out, in ms (at least 100).
+	void setPacketInterval(uint32_t ms) { _packetMs = ms < 100 ? 100 : ms; }
+	uint32_t packetInterval() const { return _packetMs; }
 
 	SimFrontEnd& frontEnd() { return _fe; }
 	meter::Meter& meter() { return _meter; }
@@ -200,6 +209,7 @@ private:
 	bt::MeterState   _state;
 	Position         _pos = Position::Volts;
 	uint32_t         _lastPacketMs = 0;
+	uint32_t         _packetMs = kDefaultPacketMs;
 	uint32_t         _packets = 0;
 	bt::Command      _clock{};
 	bool             _haveClock = false;

@@ -28,7 +28,7 @@ Ring<256> g_rx;
 Ring<1024> g_tx;
 uint8_t g_rxByte;
 volatile uint16_t g_txLen = 0;     // bytes of g_tx in flight (0: idle)
-volatile uint32_t g_dropped = 0;
+volatile uint32_t g_dropped = 0;   // writes dropped whole: the transmit ring was full
 
 // Start the next piece: from the tail to the end of the buffer at most.
 void kickTx() {
@@ -41,9 +41,13 @@ void kickTx() {
 	if (HAL_UART_Transmit_IT(g_uart, &g_tx.buf[at], len) != HAL_OK) g_txLen = 0;
 }
 
+// A packet (or an echo) goes into the ring whole or not at all: part of one
+// would garble the stream for the receiver. Only the loop writes here, and the
+// interrupt only ever frees space, so the room checked stays there.
 struct UartSink : gw121::iByteSink {
 	void write(const uint8_t* b, size_t n) override {
-		for (size_t i = 0; i < n; i++) if (!g_tx.put(b[i])) g_dropped = g_dropped + 1;
+		if (n > (size_t)(1024 - g_tx.used())) { g_dropped = g_dropped + 1; return; }
+		for (size_t i = 0; i < n; i++) g_tx.put(b[i]);
 		__disable_irq();
 		kickTx();
 		__enable_irq();
@@ -61,6 +65,10 @@ extern "C" void gw121SimStart(UART_HandleTypeDef* huart) {
 	g_sim = new (g_simMem) gw121::Simulator(g_sink);
 	HAL_UART_Receive_IT(g_uart, &g_rxByte, 1);
 }
+
+extern "C" uint32_t gw121SimDropped(void) { return g_dropped; }
+
+extern "C" void gw121SimSetPacketInterval(uint32_t ms) { if (g_sim) g_sim->setPacketInterval(ms); }
 
 extern "C" void gw121SimLoop(void) {
 	if (!g_sim) return;
@@ -84,10 +92,16 @@ extern "C" void gw121SimUartTxDone(UART_HandleTypeDef* huart) {
 
 extern "C" void gw121SimUartError(UART_HandleTypeDef* huart) {
 	if (huart != g_uart) return;
-	// An overrun or noise: drop what was in flight and listen again.
-	if (g_txLen) { g_tx.tail = (uint16_t)(g_tx.tail + g_txLen); g_txLen = 0; }
-	HAL_UART_Receive_IT(g_uart, &g_rxByte, 1);
-	kickTx();
+	// A receive error (overrun, noise, framing) ends the HAL's reception;
+	// listen again. It doesn't end a transmission: while the HAL is still
+	// sending, its bytes stay in the ring and TxCplt frees them. Only a
+	// transmission that was aborted (the handle back to READY) is dropped here.
+	if (huart->RxState == HAL_UART_STATE_READY) HAL_UART_Receive_IT(g_uart, &g_rxByte, 1);
+	if (g_txLen && huart->gState == HAL_UART_STATE_READY) {
+		g_tx.tail = (uint16_t)(g_tx.tail + g_txLen);
+		g_txLen = 0;
+		kickTx();
+	}
 }
 
 #ifndef GW121_SIM_NO_HAL_CALLBACKS

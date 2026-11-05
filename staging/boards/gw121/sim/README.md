@@ -35,7 +35,18 @@ Use the UART module (Bluefruit LE UART Friend).
 | MODE switch | UART | data mode, not command mode |
 
 USART1: 9600 baud, 8N1, no flow control (the module's default), with its
-global interrupt on. USART2 stays on the ST-LINK's virtual COM port, for
+global interrupt on.
+
+**Flow control (recommended).** The module forwards what the STM32 sends
+over Bluetooth only as fast as the link allows. A PC usually allows less
+than a phone, and the module drops what doesn't fit. Its RTS pin goes high
+while its buffer is full. To let the STM32 wait instead:
+* Wire the UART Friend's **RTS** to **D10** (PA11, USART1_CTS).
+* In CubeMX, set USART1's Hardware Flow Control to **CTS Only**.
+
+The firmware sends one packet a second by default
+(`gw121SimSetPacketInterval()` changes it), which mostly gets through
+even without flow control. USART2 stays on the ST-LINK's virtual COM port, for
 debugging.
 
 The module advertises as "Adafruit Bluefruit LE". The page's Connect lists

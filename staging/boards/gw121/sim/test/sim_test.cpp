@@ -36,6 +36,8 @@ int main(int argc, char** argv) {
 	printf("simulator: packets, keys, the rotary switch by SETUP\n");
 	Capture cap;
 	Simulator sim(cap);
+	CHECK(sim.packetInterval() == 1000);                   // the default: one a second
+	sim.setPacketInterval(250);                            // faster, so the test runs quickly
 	uint32_t now = 0;
 	std::vector<std::vector<uint8_t>> raw;
 	auto run = [&](uint32_t ms) { for (uint32_t i = 0; i < ms; i++, now++) sim.main(now); };

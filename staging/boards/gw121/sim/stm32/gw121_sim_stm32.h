@@ -25,6 +25,12 @@ extern "C" {
 void gw121SimStart(UART_HandleTypeDef* huart);
 void gw121SimLoop(void);
 
+/* How often a packet goes out, in ms (default 1000, at least 100). */
+void gw121SimSetPacketInterval(uint32_t ms);
+/* Packets and echoes dropped because the transmit ring was full: worth a
+   look in the debugger (Live Expressions) when packets go missing. */
+uint32_t gw121SimDropped(void);
+
 void gw121SimUartRxDone(UART_HandleTypeDef* huart);
 void gw121SimUartTxDone(UART_HandleTypeDef* huart);
 void gw121SimUartError(UART_HandleTypeDef* huart);
