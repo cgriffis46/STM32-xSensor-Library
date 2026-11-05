@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
 	Simulator sim(cap);
 	CHECK(sim.packetInterval() == 1000);                   // the default: one a second
 	sim.setPacketInterval(250);                            // faster, so the test runs quickly
+	sim.setSequenceSerial(false);                          // the fixed serial, checked below
 	uint32_t now = 0;
 	std::vector<std::vector<uint8_t>> raw;
 	auto run = [&](uint32_t ms) { for (uint32_t i = 0; i < ms; i++, now++) sim.main(now); };
@@ -95,6 +96,17 @@ int main(int argc, char** argv) {
 	for (uint8_t b : t) sim.feed(b);
 	bt::Command c;
 	CHECK(sim.clock(&c) && c.year == 26 && c.minute == 42);
+
+	// The packet counter in the serial field: consecutive, one per packet.
+	sim.setSequenceSerial(true);
+	cap.bytes.clear();
+	run(2000);
+	auto seq = frames(cap.bytes, nullptr, nullptr);
+	CHECK(seq.size() >= 7);
+	bool consecutive = seq.size() > 1;
+	for (size_t i = 1; i < seq.size(); i++) if (seq[i].serial != seq[i - 1].serial + 1) consecutive = false;
+	CHECK(consecutive);
+	sim.setSequenceSerial(false);
 
 	if (argc > 1) {
 		FILE* fp = fopen(argv[1], "w");

@@ -155,11 +155,11 @@
   // Bytes from the link (BLE notifications arrive in pieces of 20 or so)
   // into packets: onPacket(frame, bytes), onEcho(bytes), onBad(error, bytes).
   class StreamParser {
-    constructor(handlers) { this.h = handlers || {}; this.buf = []; this.good = 0; this.bad = 0; }
+    constructor(handlers) { this.h = handlers || {}; this.buf = []; this.good = 0; this.bad = 0; this.skipped = 0; }
     push(bytes) {
       for (const x of bytes) this.buf.push(x);
       for (;;) {
-        while (this.buf.length && this.buf[0] !== START && this.buf[0] !== KEY && this.buf[0] !== TIME) this.buf.shift();
+        while (this.buf.length && this.buf[0] !== START && this.buf[0] !== KEY && this.buf[0] !== TIME) { this.buf.shift(); this.skipped++; }
         if (!this.buf.length) return;
         const need = this.buf[0] === START ? PACKET_LEN : this.buf[0] === KEY ? 5 : 15;
         if (this.buf.length < need) return;

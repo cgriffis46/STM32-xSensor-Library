@@ -137,7 +137,7 @@ public:
 	static constexpr uint32_t kDefaultPacketMs = 1000;
 
 	explicit Simulator(iByteSink& out, uint32_t serial = 12345, uint16_t calYearMonth = 2611)
-		: _out(out), _meter(_fe), _tags(_meter), _ctl(_tags) {
+		: _out(out), _meter(_fe), _tags(_meter), _ctl(_tags), _serial(serial) {
 		_state.serial = serial;
 		_state.calYearMonth = calYearMonth;
 		_state.bluetooth = true;
@@ -172,6 +172,7 @@ public:
 		if (!_meter.latest(&r)) return;
 		_lastPacketMs = nowMs;
 		uint8_t pkt[bt::kPacketLen];
+		if (_sequenceSerial) _state.serial = _packets % 100000u;   // see setSequenceSerial()
 		bt::encode(bt::frameOf(r, _state), pkt);
 		_out.write(pkt, sizeof pkt);
 		_packets++;
@@ -179,6 +180,12 @@ public:
 
 	// How often a packet goes out, in ms (at least 100).
 	void setPacketInterval(uint32_t ms) { _packetMs = ms < 100 ? 100 : ms; }
+
+	// The serial number field counts the packets sent (0, 1, 2 ... 99999, 0),
+	// so a receiver can tell exactly which ones went missing. The Web
+	// Bluetooth page counts the gaps. On by default; a stand-in meter's serial
+	// number means nothing. Off: the serial given to the constructor.
+	void setSequenceSerial(bool on) { _sequenceSerial = on; if (!on) _state.serial = _serial; }
 	uint32_t packetInterval() const { return _packetMs; }
 
 	SimFrontEnd& frontEnd() { return _fe; }
@@ -207,6 +214,8 @@ private:
 	Controller       _ctl;
 	bt::Parser       _parser;
 	bt::MeterState   _state;
+	uint32_t         _serial;
+	bool             _sequenceSerial = true;
 	Position         _pos = Position::Volts;
 	uint32_t         _lastPacketMs = 0;
 	uint32_t         _packetMs = kDefaultPacketMs;
