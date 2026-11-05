@@ -52,6 +52,7 @@ struct UartSink : gw121::iByteSink {
 		kickTx();
 		__enable_irq();
 	}
+	size_t pending() const override { return g_tx.used(); }
 };
 
 UartSink g_sink;

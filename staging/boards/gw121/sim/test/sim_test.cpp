@@ -108,6 +108,28 @@ int main(int argc, char** argv) {
 	CHECK(consecutive);
 	sim.setSequenceSerial(false);
 
+	// A slow link: while the last packet is still waiting to go, no new one is
+	// made. When it has gone, the next is the latest reading, and the counter
+	// carries on with no gap (nothing was dropped, only not made).
+	{
+		struct SlowSink : iByteSink {
+			std::vector<uint8_t> bytes;
+			size_t queued = 0;
+			void write(const uint8_t* b, size_t n) override { bytes.insert(bytes.end(), b, b + n); queued += n; }
+			size_t pending() const override { return queued; }
+		} slow;
+		Simulator s2(slow);
+		s2.setPacketInterval(250);
+		uint32_t t = 0;
+		for (; t < 2000; t += 10) s2.main(t);
+		CHECK(s2.packets() == 1);                          // held back after the first
+		slow.queued = 0;                                   // it has gone
+		for (; t < 2100; t += 10) s2.main(t);
+		CHECK(s2.packets() == 2);                          // the next goes at once
+		auto sf = frames(slow.bytes, nullptr, nullptr);
+		CHECK(sf.size() == 2 && sf[1].serial == sf[0].serial + 1);
+	}
+
 	if (argc > 1) {
 		FILE* fp = fopen(argv[1], "w");
 		for (auto& p : raw) { for (uint8_t b : p) fprintf(fp, "%02X", b); fprintf(fp, "\n"); }

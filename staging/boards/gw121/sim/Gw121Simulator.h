@@ -46,6 +46,11 @@ public:
 	// Queue n bytes for sending. Must not wait long: a UART with a FIFO or
 	// an interrupt-driven buffer.
 	virtual void write(const uint8_t* b, size_t n) = 0;
+	// Bytes written and not yet sent. The simulator holds a new packet back
+	// while the last one is still here: the latest reading goes out when the
+	// link can take it, rather than a queue of stale ones (a one-deep queue).
+	// 0 (the default) when the sink can't tell.
+	virtual size_t pending() const { return 0; }
 };
 
 // A front end that makes its readings up, with the 121GW's ranges.
@@ -168,6 +173,7 @@ public:
 		_fe.tick(nowMs);
 		_meter.main(nowMs);
 		if (nowMs - _lastPacketMs < _packetMs) return;
+		if (_out.pending()) return;   // the last packet hasn't gone yet
 		meter::Reading r;
 		if (!_meter.latest(&r)) return;
 		_lastPacketMs = nowMs;
@@ -178,7 +184,9 @@ public:
 		_packets++;
 	}
 
-	// How often a packet goes out, in ms (at least 100).
+	// How often a packet goes out, in ms (at least 100), at most: a packet
+	// waits for the one before it to leave (iByteSink::pending()), so a slow
+	// link gets fewer, fresher packets, not a growing backlog.
 	void setPacketInterval(uint32_t ms) { _packetMs = ms < 100 ? 100 : ms; }
 
 	// The serial number field counts the packets sent (0, 1, 2 ... 99999, 0),
