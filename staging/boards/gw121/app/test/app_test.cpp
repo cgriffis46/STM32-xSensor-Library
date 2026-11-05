@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <string>
 #include "LcdBringup.h"
+#include "Gw121Simulator.h"
 
 using namespace gw121;
 using idisplay::KeyEvent;
@@ -24,6 +25,10 @@ struct FakeBeeper : idisplay::iBeeper {
 	void stop() override {}
 	bool beeping() const override { return false; }
 };
+struct FakeDiag : iFrontEndDiag {
+	FrontEndStatus st{};
+	void status(FrontEndStatus* out) override { *out = st; }
+};
 struct FakeContrast : iLcdContrast { int cc = -1; void setContrast(uint8_t c) override { cc = c; } };
 
 static KeyEvent key(uint16_t k, KeyEvent::Action a = KeyEvent::Action::Pressed) { KeyEvent e; e.keys = k; e.action = a; return e; }
@@ -37,10 +42,11 @@ static std::string text(const idisplay::SegmentFrame& f, const idisplay::SevenSe
 
 int main() {
 	printf("LCD bring-up: screens, walk, contrast, HMI\n");
-	FakeLcd lcd; FakeBeeper beep; FakeContrast con;
-	LcdBringup app(lcd, beep, &con);
+	FakeLcd lcd; FakeBeeper beep; FakeContrast con; FakeDiag diag;
+	SimFrontEnd fe;
+	LcdBringup app(lcd, beep, fe, nullptr, &con, &diag);
 	uint32_t t = 0;
-	auto run = [&](uint32_t ms) { for (uint32_t end = t + ms; t < end; t += 10) app.main(t); };
+	auto run = [&](uint32_t ms) { for (uint32_t end = t + ms; t < end; t += 10) { fe.tick(t); app.main(t); } };
 
 	app.start();
 	CHECK(con.cc == 4 && beep.beeps == 1);
@@ -106,13 +112,32 @@ int main() {
 	app.onKey(key(kKeyMode)); run(2000);
 	CHECK(lcd.f.get(glass::ICON_CONTINUITY));
 
-	// Round again: SETUP from the HMI goes back to ALL, and draws it.
+	// HY ("5t" is how "St" reads back): the driver's state and faults until it runs, then AD1 / 256 and the sample count.
+	app.onKey(key(kKeySetup)); diag.st = FrontEndStatus{ false, 4, 2, 0, 0 }; run(200);
+	CHECK(app.screen() == LcdBringup::Screen::Hy);
+	CHECK(text(lcd.f, lcd::kMain) == "5t  4" && text(lcd.f, lcd::kSub) == "    2");
+	diag.st = FrontEndStatus{ true, 7, 2, 123456, -256 * 1234 }; run(200);
+	CHECK(text(lcd.f, lcd::kMain) == " 1234" && lcd.f.get(glass::MS_NEGATIVE));
+	CHECK(text(lcd.f, lcd::kSub) == "23456" && !lcd.f.get(glass::SS_NEGATIVE));
+
+	// Round again: SETUP from HY goes back to ALL, and draws it.
 	app.onKey(key(kKeySetup)); run(20);
 	CHECK(app.screen() == LcdBringup::Screen::All && lcd.lit() == glass::kAllCount);
 	// And the HMI draws again on coming back, though its own frame is unchanged.
 	for (int i = 0; i < 3; i++) app.onKey(key(kKeySetup));
 	run(200);
 	CHECK(lcd.f.get(glass::MS_OHMS) && lcd.lit() < glass::kAllCount);
+
+	// Without a diag, SETUP goes from HMI straight to ALL.
+	{
+		FakeLcd l2; FakeBeeper b2; SimFrontEnd f2;
+		LcdBringup a2(l2, b2, f2);
+		a2.start();
+		for (int i = 0; i < 3; i++) a2.onKey(key(kKeySetup));
+		CHECK(a2.screen() == LcdBringup::Screen::Hmi);
+		a2.onKey(key(kKeySetup));
+		CHECK(a2.screen() == LcdBringup::Screen::All);
+	}
 
 	if (g_failures) { printf("%d FAILED\n", g_failures); return 1; }
 	printf("all passed\n");

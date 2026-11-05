@@ -1,4 +1,4 @@
-# The 121GW LCD bring-up firmware: EEVBlog.bin for the stock bootloader.
+# The 121GW bring-up firmware (LCD, keys, rotary switch, HY3131): EEVBlog.bin for the stock bootloader.
 #
 #   make            build/EEVBlog.bin (and .elf, .map)
 #
@@ -18,7 +18,7 @@ CPU   = -mcpu=cortex-m3 -mthumb
 FLAGS = $(CPU) -std=c++17 -Os -g -Wall -Wextra -Werror -fno-exceptions -fno-rtti -fno-threadsafe-statics \
         -fno-use-cxa-atexit -ffunction-sections -fdata-sections -DSTM32L152xD
 INC = -I.. -I$(STAGING)/boards/gw121/inc -I$(STAGING)/boards/gw121/sim -I$(STAGING)/imeter/inc \
-      -I$(STAGING)/isensor/hy3131/inc -I$(STAGING)/idisplay/input/inc -I$(STAGING)/idisplay/segment/inc \
+      -I$(STAGING)/isensor/hy3131/inc -I$(STAGING)/isensor/hy3131/src -I$(STAGING)/idisplay/input/inc -I$(STAGING)/idisplay/segment/inc \
       -I$(STAGING)/idisplay/hw/stm32l1/inc -I$(STAGING)/itransport/inc -I$(STAGING)/itransport/hw/stm32l1/inc \
       -I$(HMI_INC) -I$(EX)/iTransport/inc -I$(EX)/isensor/inc -I$(L1_DEVICE) -I$(CMSIS_CORE)
 SRC = main.cpp startup.cpp $(STAGING)/imeter/src/Meter.cpp

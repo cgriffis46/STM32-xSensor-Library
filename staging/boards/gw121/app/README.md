@@ -1,8 +1,17 @@
-# 121GW LCD bring-up firmware
+# 121GW bring-up firmware
 
-A first firmware of ours on the 121GW itself. It runs the LCD, keys, buzzer
-and rotary switch. It doesn't use the HY3131 or anything analog: the
-readings on the HMI screen are made up (the BLE stand-in's `SimFrontEnd`).
+A first firmware of ours on the 121GW itself. It runs the LCD, keys, buzzer,
+rotary switch and the HY3131 front end:
+* The HY3131 is bit-banged on PF0–PF3, with DO polled as the stock firmware
+  does.
+* `Hy3131FrontEnd` puts it under our meter, with the 121GW's route table and
+  its analog switches (`Gw121Paths.h`).
+* The calibration is the meter's own factory calibration, read (never
+  written) from the data EEPROM.
+
+It covers the functions `Gw121Routes.h` has: DC/AC V, DC/AC mV, ohms,
+continuity, DC/AC µA, mA and A, and Hz. It has no input warnings, no Low Z,
+capacitance, diode or temperature yet, and no AC frequency correction.
 
 * `LcdBringup.h`: the app. It is hardware and OS agnostic and non-blocking,
   and is host-tested (`make -C test test`).
@@ -16,9 +25,11 @@ readings on the HMI screen are made up (the BLE stand-in's `SimFrontEnd`).
 * **Keep a copy of the stock firmware** to go back to. Use the `EEVBlog.bin`
   for your meter's version from EEVblog's site, or `binaries/EEVBlog-102.bin`
   in [tpwrules/121gw-re](https://github.com/tpwrules/121gw-re).
-* **No test leads in the jacks.** This firmware sets the analog switch pins
-  as the stock firmware does at power on, but nothing measures, guards or
-  warns.
+* **Only low voltages to begin with.** Use a 1.5 V cell, a bench supply
+  under 5 V, or a resistor. The meter's input protection is hardware and
+  works whatever the firmware does. But this firmware has never measured
+  anything, and it has none of the stock firmware's warnings (the input
+  warning beep, the fuse comparators). Keep leads out of the mA and A jacks.
 * **What it doesn't touch:** the bootloader (0x08000000–0x08006000), the
   data EEPROM (the calibration, 0x08080000) and the option bytes. It only
   replaces the firmware at 0x08006000, as any firmware update does.
@@ -39,18 +50,52 @@ To go back to the stock firmware, do the same with the stock `EEVBlog.bin`.
 ## What it does
 
 It starts with a long beep and every segment on. **SETUP** steps through
-the screens:
+five screens (ALL → DIGITS → WALK → HMI → HY → ALL):
 
 | Screen | What you should see | Keys |
 |---|---|---|
 | 1 ALL | Every segment of the glass | |
 | 2 DIGITS | Both displays count 0 to 9 in every place, every 0.7 s. The point moves along, and the minus sign is on for odd digits. Then `-8.8.8.8.8` with every point | |
 | 3 WALK | One segment at a time, with its number on the sub display (on the main display while the segment is part of the sub display). Compare with the table below | RANGE next, REL back. Hold for 10 at a time |
-| 4 HMI | The real HMI on our meter stack, with made-up readings. The sub display shows the rotary switch's position | Rotary switch, RANGE, HOLD, REL, MODE |
+| 4 HMI | The meter: our stack on the HY3131. The sub display shows the rotary switch's position | Rotary switch, RANGE, HOLD, REL, MODE |
+| 5 HY | The HY3131 driver's insides (see below) | |
 
 On every screen, **PEAK** raises the contrast and **MEM** lowers it (0–7,
 starting at 4, the stock setting). A key that did something beeps once. A
 key that can't do anything on this screen beeps twice.
+
+## The HY3131, step by step
+
+**1. Does it answer?** Go to the HY screen.
+
+| HY shows | Meaning |
+|---|---|
+| Main: a number that changes. Sub: a count going up | Running. Main is AD1 / 256 (raw, for the function the rotary switch picked). Sub is how many results have been read |
+| Main `5t  n` (St, the driver's state). Sub: a fault count going up | The chip doesn't answer, or reads back wrong. It is reset and retried every second. `n` 4–6 is the start-up; it never gets to running |
+| Main stays at `5t  n` with the same `n` | The driver is stuck in one state: tell me `n` |
+
+States: 0 stopped, 1–3 queueing, 4 reset settle, 5 oscillator settle,
+6 checking the configuration, 7–10 running, 11 error.
+
+A rising fault count with `n` cycling 4, 5, 6 means the read-back doesn't
+match: wiring, timing or the reset. The HY3131 reset (R37 = 0x60) is
+something the stock firmware doesn't do, so suspect it first.
+
+**2. Does the meter read?** Go to HMI with the switch on V.
+* **No leads:** close to 0.0000 V, wandering in the last digit or two. AUTO
+  should be on.
+* **A 1.5 V cell** (+ to V, − to COM): about 1.5xxx V. Compare with another
+  meter.
+* **Then** try mV with the same cell (OL on the 50 mV range: auto range
+  should move up), Ω with a known resistor, and Hz with a signal if you
+  have one.
+
+Readings are flagged uncalibrated (no calibration found) if the EEPROM
+layout isn't what `Gw121Calibration.h` expects. They'll still be close.
+
+**3. When it's wrong:** note the function, range, what it shows and what it
+should show. A wrong reading in one range but not others is the route
+table. A wrong reading everywhere is the calibration, or AD1's scaling.
 
 In HMI, the sub display should read:
 
@@ -58,11 +103,15 @@ In HMI, the sub display should read:
 |---|---|---|---|---|---|---|---|---|
 | Sub display | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
 
-The main display should match: DC V 1.2xxx at V, 12.xxx mV at mV, 50.00 Hz, 3.3000 kΩ, and so on.
+The main display's units should match the position: V at V, mV at mV, Hz at Hz, Ω at Ω.
 If they come out reversed (V showing 6), the rotary switch is wired the
 schematic's way, not the stock firmware's (`Gw121RangeSwitch.h`).
 
 ## What to report back
+
+* **HY:** whether it runs (a count going up), or the `5t  n` and fault
+  count it shows.
+* **HMI:** the readings, with what they should be, per function and range.
 
 * **ALL:** any segment that's dark, or anything lit that shouldn't be.
 * **DIGITS:** any digit that draws wrongly, and which place it's in.

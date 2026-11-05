@@ -1,6 +1,12 @@
-// The LCD bring-up firmware on the 121GW's STM32L152ZD: the board's side of
+// The bring-up firmware on the 121GW's STM32L152ZD: the board's side of
 // gw121::LcdBringup (../LcdBringup.h). Bare metal, no RTOS: a 1 ms SysTick
 // and a main loop that never waits.
+//
+// The HY3131 is on PF0..PF3, bit-banged (BitBangSpiBlockTransport), DO polled
+// as the stock firmware does. Its driver, hy3131_dmm, runs without an OS
+// (its sleep() does nothing here). Hy3131FrontEnd puts it under the meter
+// with the 121GW's route table, its analog switches (Gw121Paths) and the
+// meter's own factory calibration, read from the data EEPROM.
 //
 // Built for 0x08006000 and loaded by the stock bootloader from the SD card
 // as EEVBlog.bin, so the bootloader stays, and the stock firmware goes back
@@ -10,10 +16,17 @@
 // Clocks as the stock firmware: MSI 4.194 MHz, voltage range 1; the LCD
 // from the LSI. Pins as the stock firmware leaves them at power on
 // (121gw-re: gpio_config_meter_hardware(), gpio_config_lcd_pins()), the
-// HY3131 deselected and the buzzer and backlight off.
+// HY3131 deselected until its driver starts, the buzzer and backlight off.
 #include <stdint.h>
 #include "stm32l1xx.h"
 #include "Stm32L1Lcd.h"
+#include "BitBangSpiBlockTransport.h"
+#include "Stm32L1GpioSpiPins.h"
+#include "hy3131.h"
+#include "Hy3131FrontEnd.h"
+#include "Gw121Routes.h"
+#include "Gw121Calibration.h"
+#include "Gw121Paths.h"
 #include "Gw121L1Gpio.h"
 #include "LcdBringup.h"
 
@@ -120,12 +133,42 @@ struct Contrast : gw121::iLcdContrast {
 	void setContrast(uint8_t cc) override { lcd.setContrast(cc); }
 };
 
+// The HY3131: DO read with CS high says a result is waiting.
+using HySpi = BitBangSpiBlockTransport<Stm32L1GpioSpiPins>;
+using Dmm   = hy3131_dmm<HySpi>;
+using Fe    = meter::Hy3131FrontEnd<Dmm>;
+
+Stm32L1GpioSpiPins g_doPins = gw121::hyPins();
+hy3131_param_t hyParam() {
+	hy3131_param_t p = hy3131_default_param();
+	p.doLevel = &Stm32L1GpioSpiPins::doLevelOf;
+	p.doCtx = &g_doPins;
+	return p;
+}
+Dmm g_dmm(hyParam(), gw121::hyPins());
+gw121::Paths<gw121::L1Gpio> g_paths;
+Fe g_fe(g_dmm, gw121::kRoutes, gw121::kRouteCount, hy3131::kXtalHz, &g_paths);
+gw121::MappedEeprom g_eeprom;
+gw121::StockCalibration g_cal(g_eeprom);
+
+struct HyDiag : gw121::iFrontEndDiag {
+	void status(gw121::FrontEndStatus* out) override {
+		out->running = g_dmm.running();
+		out->state = (uint8_t)g_dmm.driverState();
+		out->faults = g_dmm.faults();
+		hy3131::Sample s;
+		if (g_dmm.latest(&s)) { out->samples = s.seq; out->ad1 = s.ad1; }
+		else { out->samples = 0; out->ad1 = 0; }
+	}
+};
+HyDiag g_diag;
+
 idisplay::Stm32L1Lcd g_lcd;
 Contrast g_contrast(g_lcd);
 idisplay::Buzzer<gw121::BuzzerPin> g_buzzer;
 idisplay::KeyScanner g_keys(gw121::keyConfig());
 gw121::RangeSwitch g_rotary;
-gw121::LcdBringup g_app(g_lcd, g_buzzer, &g_contrast);
+gw121::LcdBringup g_app(g_lcd, g_buzzer, g_fe, &g_cal, &g_contrast, &g_diag);
 
 } // namespace
 
@@ -152,6 +195,7 @@ int main() {
 		if (g_keys.poll(&e)) g_app.onKey(e);
 		gw121::Position p;
 		if (g_rotary.poll(&p)) g_app.onPosition(p);
-		g_app.main(now);
+		g_dmm.main(now);   // the HY3131: a few register reads when DO says so
+		g_app.main(now);   // the meter on its results, and the screen
 	}
 }

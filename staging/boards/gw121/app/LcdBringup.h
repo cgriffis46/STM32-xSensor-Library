@@ -1,9 +1,8 @@
 /*
  * LcdBringup.h
  *
- *  A first firmware for the 121GW itself: the LCD, keys, buzzer and rotary
- *  switch, without the HY3131 or anything analog. Four screens, SETUP
- *  steps through them:
+ *  A first firmware for the 121GW itself: the LCD, keys, buzzer, rotary
+ *  switch and the HY3131. Five screens, SETUP steps through them:
  *
  *    1 ALL     every segment of the glass on (Gw121Glass.h's 160)
  *    2 DIGITS  both displays count 0..9 in every place, the point walking,
@@ -13,11 +12,15 @@
  *              segment is one of the sub display's own). RANGE next, REL
  *              back, long press: 10 at a time. Compare with the index list
  *              in the README.
- *    4 HMI     the real HMI (Gw121Lcd.h's LcdLayout) on our meter stack,
- *              with made-up readings (the BLE stand-in's SimFrontEnd). The
- *              rotary switch picks the function, RANGE/HOLD/REL/MODE work
- *              as they will on the meter, and the sub display shows the
- *              rotary switch's position (0 Low Z .. 7 mA/A).
+ *    4 HMI     the real HMI (Gw121Lcd.h's LcdLayout) on our meter stack and
+ *              the front end it is given: on the meter the HY3131
+ *              (Hy3131FrontEnd), in a test the BLE stand-in's SimFrontEnd.
+ *              The rotary switch picks the function, RANGE/HOLD/REL/MODE
+ *              work, and the sub display shows the rotary switch's
+ *              position (0 Low Z .. 7 mA/A).
+ *    5 HY      the front end's insides, when an iFrontEndDiag is given:
+ *              before the chip runs, "St  n" (the driver's state) and the
+ *              fault count; once it runs, AD1 / 256 and the sample count.
  *
  *  On every screen: PEAK contrast up, MEM contrast down (0..7, 4 is the
  *  stock setting). A key beeps once if it did something, twice if not.
@@ -44,7 +47,6 @@
 #include "Gw121Lcd.h"
 #include "Gw121Keys.h"
 #include "Gw121RangeSwitch.h"
-#include "Gw121Simulator.h"
 
 namespace gw121 {
 
@@ -54,15 +56,34 @@ public:
 	virtual void setContrast(uint8_t cc) = 0;   // 0..7
 };
 
+// What the HY screen shows: the board fills it from its HY3131 driver.
+struct FrontEndStatus {
+	bool     running;   // configured, and the read-back matched
+	uint8_t  state;     // the driver's state (hy3131_state_t)
+	uint32_t faults;    // resets after a fault: should stay 0
+	uint32_t samples;   // results read so far
+	int32_t  ad1;       // the latest AD1, raw
+};
+
+class iFrontEndDiag {
+public:
+	virtual ~iFrontEndDiag() = default;
+	virtual void status(FrontEndStatus* out) = 0;
+};
+
 class LcdBringup {
 public:
-	enum class Screen : uint8_t { All, Digits, Walk, Hmi, Count_ };
+	enum class Screen : uint8_t { All, Digits, Walk, Hmi, Hy, Count_ };
 	static constexpr uint32_t kDigitStepMs = 700;
 	static constexpr uint32_t kHmiRefreshMs = 100;
 
-	LcdBringup(idisplay::iSegmentLcd& lcd, idisplay::iBeeper& beeper, iLcdContrast* contrast = nullptr, uint8_t cc = 4)
-		: _lcd(lcd), _beep(beeper), _contrast(contrast), _cc(cc > 7 ? 7 : cc),
-		  _meter(_fe), _tags(_meter), _chain(_sources, 2),
+	// fe: the measurement front end; the board runs it (its main() or
+	// tick()), this runs the meter on it. cal: the calibration, if any.
+	LcdBringup(idisplay::iSegmentLcd& lcd, idisplay::iBeeper& beeper, meter::iMeterFrontEnd& fe,
+	           meter::iCalibrationStore* cal = nullptr, iLcdContrast* contrast = nullptr,
+	           iFrontEndDiag* diag = nullptr, uint8_t cc = 4)
+		: _lcd(lcd), _beep(beeper), _contrast(contrast), _diag(diag), _cc(cc > 7 ? 7 : cc),
+		  _meter(fe, cal), _tags(_meter), _chain(_sources, 2),
 		  _hmi(lcd, _chain, _layout.fields(), _layout.count()), _ctl(_chain, &beeper) {
 		_sources[0] = &_tags;
 		_sources[1] = &_board;
@@ -82,7 +103,9 @@ public:
 		const bool shortPress = e.action == A::Pressed;
 		const bool held = e.action == A::Held;
 		if (e.keys == kKeySetup && shortPress) {
-			enter((Screen)(((uint8_t)_screen + 1) % (uint8_t)Screen::Count_));
+			Screen next = (Screen)(((uint8_t)_screen + 1) % (uint8_t)Screen::Count_);
+			if (next == Screen::Hy && !_diag) next = Screen::All;
+			enter(next);
 			_beep.ok();
 			return;
 		}
@@ -115,7 +138,6 @@ public:
 	}
 
 	void main(uint32_t nowMs) {
-		_fe.tick(nowMs);
 		_meter.main(nowMs);
 		switch (_screen) {
 		case Screen::All:
@@ -132,6 +154,9 @@ public:
 			break;
 		case Screen::Walk:
 			if (_dirty) { drawWalk(); _dirty = false; _pending = true; }
+			break;
+		case Screen::Hy:
+			if (_dirty || nowMs - _stepMs >= kHmiRefreshMs) { _stepMs = nowMs; _dirty = false; drawHy(); _pending = true; }
 			break;
 		case Screen::Hmi:
 			if (nowMs - _stepMs >= kHmiRefreshMs || _dirty) { _stepMs = nowMs; _dirty = false; _hmi.refresh(); }
@@ -201,6 +226,37 @@ private:
 		_frame.set(glass::SS_NEGATIVE, minus);
 	}
 
+	// Up to 5 characters, right aligned; a '-' first is the minus sign's.
+	static void drawText(idisplay::SegmentFrame& f, const idisplay::SevenSegDigit* d, const char* t) {
+		const size_t n = strlen(t) > 5 ? 5 : strlen(t);
+		for (size_t i = 0; i < n; i++) idisplay::seven::draw(f, d[5 - n + i], idisplay::seven::glyph(t[i]));
+	}
+	static void drawSigned(idisplay::SegmentFrame& f, const idisplay::SevenSegDigit* d, idisplay::SegRef minus, int32_t v) {
+		f.set(minus, v < 0);
+		const uint32_t a = v < 0 ? (uint32_t)(-(int64_t)v) : (uint32_t)v;
+		char t[6];
+		uint32_t x = a % 100000u;
+		int i = 5;
+		t[i] = 0;
+		do { t[--i] = (char)('0' + x % 10); x /= 10; } while (x && i > 0);
+		drawText(f, d, t + i);
+	}
+
+	void drawHy() {
+		_frame.clear();
+		FrontEndStatus st{};
+		if (_diag) _diag->status(&st);
+		if (!st.running) {
+			char t[6] = { 'S', 't', ' ', ' ', (char)('0' + st.state % 10), 0 };
+			if (st.state >= 10) t[3] = (char)('0' + (st.state / 10) % 10);
+			drawText(_frame, lcd::kMain, t);
+			drawSigned(_frame, lcd::kSub, glass::SS_NEGATIVE, (int32_t)(st.faults % 100000u));
+		} else {
+			drawSigned(_frame, lcd::kMain, glass::MS_NEGATIVE, st.ad1 / 256);
+			drawSigned(_frame, lcd::kSub, glass::SS_NEGATIVE, (int32_t)(st.samples % 100000u));
+		}
+	}
+
 	void drawWalk() {
 		_frame.clear();
 		drawNumber(_frame, onSubDisplay(_walk) ? lcd::kMain : lcd::kSub, _walk);
@@ -210,9 +266,9 @@ private:
 	idisplay::iSegmentLcd& _lcd;
 	idisplay::iBeeper& _beep;
 	iLcdContrast* _contrast;
+	iFrontEndDiag* _diag;
 	uint8_t _cc;
 
-	SimFrontEnd _fe;
 	meter::Meter _meter;
 	meter::MeterTags _tags;
 	BoardTags _board;
