@@ -115,6 +115,7 @@ not by copying the app's code.
 | `inc/Gw121Keys.h` | The 8 keys (PG8..PG15) and HOLD + MEM, with the stock firmware's timing. `Controller` turns keys, and the phone's key messages, into `meter.*` tag writes and beeps. RANGE (short: manual / next range, long: auto), HOLD, REL and MODE work; MIN/MAX, PEAK, MEM and SETUP beep "no" for now |
 | `inc/Gw121L1Gpio.h` | The pins above, for the STM32L1 |
 | `tools/gen_gw121.py` | Regenerates the two generated headers from a 121gw-re checkout |
+| `app/` | The LCD bring-up firmware: our first firmware on the meter itself (LCD, keys, buzzer, rotary switch; no HY3131). Builds an `EEVBlog.bin` for the stock bootloader. See `app/README.md` |
 
 The HY3131 goes through `BitBangSpiBlockTransport<Stm32L1GpioSpiPins>`
 (`staging/itransport`). `hy3131_param_t::doLevel` reads PF3, as the stock
@@ -160,7 +161,7 @@ drives the meter, from the HMI, the shell or a PLC.
   schematic is right.
 * **Whether the SYSCLK calibration (Hz) is set on real meters.** The dump has 0
   there, and the stock firmware then uses 4,915,205 Hz.
-* **The LCD:**
+* **The LCD** (`app/`, the bring-up firmware, does all of this):
   * Turn on every segment (`xSegmentHmi::setTestPattern`) and compare
     with the glass.
   * Show `8.8.8.8.8` and each icon in turn, to confirm the names from

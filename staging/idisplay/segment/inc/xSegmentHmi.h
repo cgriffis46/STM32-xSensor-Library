@@ -39,6 +39,9 @@ public:
 
     // Every segment on, for checking the glass (the stock 121GW does it at power on).
     void setTestPattern(bool on) { test_ = on; }
+    // Something else drew on the LCD: the next refresh() writes even if
+    // the frame is the one this HMI showed last.
+    void invalidate() { haveShown_ = false; }
     const SegmentFrame& shown() const { return shown_; }
 
 private:
