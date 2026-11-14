@@ -14,7 +14,7 @@ DST="$HERE/l432kc-sensor-bringup"
 IT="$SRC/iTransport/itransport"
 
 # Sensor drivers: isensor/<folder>, inc/ and src/ each
-SENSORS="aht20 bme280 bme680 bmp280 bmp390 DS18B20 ds1307 ds3231 HMC6352 htu21df lps35hw lsm303dlhc mmc56x3 mpl3115a2 PM25 sht31 si7021"
+SENSORS="aht20 bme280 bme680 bmp280 bmp390 DS18B20 ds1307 ds3231 HMC6352 htu21df iaqcore lps35hw lsm303dlhc mmc56x3 mpl3115a2 PM25 sht31 si7021"
 
 # itransport: the bus classes and the debug log
 IT_INC="BusTransport.h DebugLog.h I2CTransport.h ISensorTransport.h OneWireUartTransport.h SPITransport.h iTransport.h iTransportOneWire.h"
