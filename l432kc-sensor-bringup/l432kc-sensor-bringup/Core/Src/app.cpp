@@ -23,6 +23,10 @@
   *    0x40      Si7021/Si7020/Si7013     (electronic ID byte SNB_3 0x15/0x14/0x0D),
   *              otherwise HTU21D(F)      (the same commands; general knowledge)
   *    0x44/45   SHT31                    (answers)
+  *    0x5A      ams iAQ-Core             (read only: its 9 bytes, a status it can
+  *                                        have and the resistance's top byte 0. Never
+  *                                        addressed with the write bit, which its
+  *                                        datasheet says can leave it uncontactable)
   *    0x5C/5D   LPS35HW                  (WHO_AM_I 0xB1 in 0x0F)
   *    0x60      MPL3115A2                (WHO_AM_I 0xC4 in 0x0C)
   *    0x68      DS3231                   (registers 0x0E..0x12 as only a DS3231 has
@@ -97,6 +101,7 @@
 #include "xds3231.h"
 #include "xhmc6352.h"
 #include "xHTU21DF.h"
+#include "xiaqcore.h"
 #include "xlps35hw.h"
 #include "xlsm303dlhc.h"
 #include "xmmc56x3.h"
@@ -320,6 +325,10 @@ static void formatFixed(char *out, size_t len, double v, int decimals)
     scale *= 10;
   const bool neg = v < 0;
   const long long n = (long long)((neg ? -v : v) * scale + 0.5);
+  if (decimals <= 0) {                     // a whole number: "450", not "450.0"
+    snprintf(out, len, "%s%ld", neg ? "-" : "", (long) n);
+    return;
+  }
   snprintf(out, len, "%s%ld.%0*ld", neg ? "-" : "", (long)(n / scale), decimals, (long)(n % scale));
 }
 
@@ -545,6 +554,55 @@ public:
   }
   int state() override { return (int) d.state(); }
   uint32_t periodMs() const override { return HMC6352::hmc6352_period_ms; }
+};
+
+// ams iAQ-Core: CO2 and TVOC equivalents from a VOC sensor. Driven as the
+// continuous iAQ-Core C (a read a second); a pulsed iAQ-Core P can't be told
+// from it on the bus, and read this often only repeats its values between
+// its own measurements (11 s at most). The module says so while it warms up
+// (about 5 minutes from power-up) and when its values aren't valid: each
+// change of its status gets a line of its own.
+class Iaqcore : public Sensor {
+  IAQCORE::xiaqcore<I2C> d;
+  static IAQCORE::iaqcore_param_t param() {
+    IAQCORE::iaqcore_param_t p;
+    p.variant = IAQCORE::iaqcore_continuous;
+    p.period_ms = 0;                        // the variant's own interval: 1 s
+    return p;
+  }
+public:
+  explicit Iaqcore(uint8_t a) : Sensor("iaqcore", a), d(param(), &hi2c1, a, i2c1_mutexHandle) { d.setDebugTag(tag); }
+  void step(uint32_t now) override { d.main(now); }
+  bool reading(Line &l) override {
+    if (d.statusChanged()) {
+      switch (d.getStatus()) {
+      case IAQCORE::iaqcore_status_runin:
+        l.text("warming up (status RUNIN): readings start about 5 min after power-up");
+        return true;
+      case IAQCORE::iaqcore_status_error:
+        l.text("status ERROR: no valid values (if it stays, the sensor element is probably defective)");
+        return true;
+      case IAQCORE::iaqcore_status_none:
+        l.text("no answer to the read, or not an iAQ-Core's status");
+        return true;
+      default:
+        break;                              // OK: the reading itself says so
+      }
+    }
+    if (!d.newData()) return false;
+    float co2, tvoc, ohm;
+    d.getCO2(&co2);
+    d.getTVOC(&tvoc);
+    d.getResistance(&ohm);
+    l.value("CO2eq", co2, 0, " ppm");
+    l.value("TVOCeq", tvoc, 0, " ppb");
+    l.value("R", ohm / 1000.0, 1, " kOhm");
+    return true;
+  }
+  int state() override { return (int) d.state(); }
+  // While it warms up no reading is due for 5 minutes, so the "no reading"
+  // watch waits that long
+  uint32_t periodMs() const override { return d.warmingUp() ? IAQCORE::iaqcore_warmup_ms : d.periodMs(); }
 };
 
 class Htu21df : public Sensor {
@@ -1092,6 +1150,7 @@ static uint8_t si70xxPart(void)
 enum Found : uint8_t {
   F_NONE, F_AHT20, F_BME280, F_BME680, F_BMP280, F_BMP390, F_BMP388, F_HMC6352, F_HTU21DF, F_SI7021,
   F_LPS35HW, F_MPL3115A2, F_SHT31, F_DS1307, F_MMC56X3, F_LSM303_A, F_LSM303_M, F_DS3231,
+  F_IAQCORE,
   F_COUNT   // how many kinds; keep it last
 };
 struct Hit { Found what; uint8_t addr; };
@@ -1115,8 +1174,17 @@ static int scanBus(Hit *hits, int maxHits)
     return 0;
   }
   memset(ack, 0, sizeof(ack));
+  uint8_t iaq[IAQCORE::iaqcore_frame_len] = {0};
   for (uint8_t a = 0x08; a <= 0x77; ++a) {
-    ack[a] = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK;
+    // HAL_I2C_IsDeviceReady() addresses a chip with the write bit. An ams
+    // iAQ-Core must never be: its datasheet (v1-00, "Address") says that can
+    // lose it its communication settings and leave it uncontactable. So
+    // 0x5A is asked with a read instead, of the iAQ-Core's 9 bytes, which
+    // any other chip there will also acknowledge.
+    if (a == IAQCORE_I2C_ADDR)
+      ack[a] = HAL_I2C_Master_Receive(&hi2c1, (uint16_t)(a << 1), iaq, sizeof(iaq), 20) == HAL_OK;
+    else
+      ack[a] = HAL_I2C_IsDeviceReady(&hi2c1, (uint16_t)(a << 1), 1, 2) == HAL_OK;
     if (ack[a] && n + 6 < sizeof(list))
       n += (size_t) snprintf(list + n, sizeof(list) - n, " 0x%02X", a);
   }
@@ -1139,6 +1207,13 @@ static int scanBus(Hit *hits, int maxHits)
   }
   if (ack[0x44]) add(F_SHT31, 0x44);
   else if (ack[0x45]) add(F_SHT31, 0x45);
+  if (ack[IAQCORE_I2C_ADDR]) {
+    // No ID to read: an iAQ-Core by its status byte being one it can have,
+    // and the resistance's top byte (byte 3) being 0, as it always is
+    uint16_t co2, tvoc; int32_t ohm; IAQCORE::iaqcore_status_t st;
+    if (IAQCORE::iaqcore<I2C>::decode(iaq, &co2, &st, &ohm, &tvoc) && iaq[3] == 0) add(F_IAQCORE, IAQCORE_I2C_ADDR);
+    else note("  0x%02X: answers a read, but not as an iAQ-Core (status 0x%02X, byte 3 0x%02X); left alone\r\n", IAQCORE_I2C_ADDR, iaq[2], iaq[3]);
+  }
   for (uint8_t a = 0x5C; a <= 0x5D; ++a)
     if (ack[a]) {
       if (readReg(a, LPS35HW_ID_REG, v) && v[0] == LPS35HW_WHO_AM_I) add(F_LPS35HW, a);
@@ -1169,7 +1244,7 @@ static int scanBus(Hit *hits, int maxHits)
   static const char *const names[] = {"", "AHT20", "BME280", "BME680", "BMP280", "BMP390", "BMP388", "HMC6352",
                                       "HTU21D(F)", "Si70xx", "LPS35HW", "MPL3115A2", "SHT31", "DS1307 (assumed)",
                                       "MMC56x3", "LSM303DLHC accelerometer (assumed)", "LSM303DLHC magnetometer",
-                                      "DS3231"};
+                                      "DS3231", "iAQ-Core"};
   for (int i = 0; i < nHits; ++i)
     consolePrint("  0x%02X: %s\r\n", hits[i].addr, names[hits[i].what]);
   return nHits;
@@ -1193,6 +1268,7 @@ static void startFound(const Hit &h, bool *started)
   case F_BMP388:    { static Bmp390 s(h.addr, true); start(s); break; }
   case F_HMC6352:   { static Hmc6352 s(h.addr); start(s); break; }
   case F_HTU21DF:   { static Htu21df s(h.addr); start(s); break; }
+  case F_IAQCORE:   { static Iaqcore s(h.addr); start(s); break; }
   case F_SI7021:    { static Si7021s s(h.addr); start(s); break; }
   case F_LPS35HW:   { static Lps35hw s(h.addr); start(s); break; }
   case F_MPL3115A2: { static Mpl3115a2 s(h.addr); start(s); break; }

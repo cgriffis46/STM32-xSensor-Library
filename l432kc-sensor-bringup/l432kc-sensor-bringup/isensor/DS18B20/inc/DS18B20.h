@@ -113,6 +113,10 @@ public:
 
 protected:
 
+	// A failure (no presence, a bus fault, a bad CRC) takes the reading
+	// away: NAN until a good one, never the last value left standing.
+	void onFail() override { _temp = NAN; _newData = false; }
+
 	bool _newData;
 	uint32_t cycle_start;	// when the current measurement began
 	float _temp;

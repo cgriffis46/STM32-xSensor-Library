@@ -29,6 +29,7 @@ its history, tagged `legacy-2026-10`.
 | 0x40 | Si7021 / Si7020 / Si7013 | electronic ID SNB_3 0x15 / 0x14 / 0x0D | `Si7021` | 2 s |
 | 0x40 | HTU21D(F), or anything else there | not an Si70xx | `HTU21DF` | 1 s |
 | 0x44 / 0x45 | SHT31 | answers | `SHT31` (periodic) | 1 s |
+| 0x5A | ams iAQ-Core (C or P) | read only: its 9 bytes, with a status it can have and byte 3 at 0 | `iaqcore` (as the continuous C) | 1 s, after about 5 min of warm-up |
 | 0x5C / 0x5D | LPS35HW | WHO_AM_I 0xB1 in 0x0F | `lps35hw` | 1 s |
 | 0x60 | MPL3115A2 | WHO_AM_I 0xC4 in 0x0C | `mpl3115a2` (both modes: pressure, then altitude) | 5 s |
 | 0x68 | DS3231 | registers 0x0E..0x12 as only a DS3231 has them, and the register pointer wrapping from 0x12 to the seconds (read only) | `ds3231` (time, temperature, aging offset) | 1 s |
@@ -54,6 +55,23 @@ Notes on recognising the chips:
   100,000 DS1307s with random RAM and 60 with RAM of zeros (none taken for a
   DS3231). The wrap, the zero bits and the temperature format are as Maxim's
   DS3231 datasheet (19-5170 Rev 10) gives them; not yet tried on a chip.
+* **The iAQ-Core is never addressed to write.** Its datasheet (ams, v1-00,
+  "Address") says: "Please avoid addressing the iAQ-Core with write bit.
+  This could cause a loss of communication relevant information on modules
+  side and the iAQ-Core is no longer contactable." The scan asks every
+  other address with the write bit (`HAL_I2C_IsDeviceReady()`), but 0x5A
+  with a read of 9 bytes, and the `iaqcore` driver only ever reads. Any
+  other chip at 0x5A (an MLX90614, a CCS811, an MPR121) is listed and left
+  alone. Earlier versions of this project did write-probe 0x5A: don't run
+  them with an iAQ-Core connected. Its console lines:
+
+      iaqcore   warming up (status RUNIN): readings start about 5 min after power-up | 1
+      iaqcore   CO2eq 450 ppm  TVOCeq 125 ppb  R 256.4 kOhm | 2
+
+  The values are equivalents the module works out from a VOC sensor,
+  relative to a baseline it corrects by itself (450 ppm and 125 ppb are
+  clean air), not a CO2 measurement. A pulsed iAQ-Core P is read every
+  second like the C and repeats its values between its own measurements.
 * **Only the first of each kind is driven.** A second BME280 at the other
   address is reported, not started.
 * **The Bosch chips** (BME280, BMP280, BME680, BMP390) share 0x76 and 0x77:
@@ -346,6 +364,14 @@ edit the copies here.
 
 ## Not verified
 
+* **The iAQ-Core** (added 2026-11-14) has not run on a module. Its driver
+  passed Claude-iTransport's host test against a simulated module that
+  counts every address with the write bit (none). The whole project, with
+  it, was compiled and linked outside CubeIDE with arm-none-eabi-gcc 13.2.1
+  and the Debug settings (223.6 KB of code at -O0); not built in
+  STM32CubeIDE itself. That `HAL_I2C_IsDeviceReady()` addresses to write and
+  `HAL_I2C_Master_Receive()` to read was read in this project's
+  `stm32l4xx_hal_i2c.c`.
 * **On the board:**
   * This firmware ran on the NUCLEO-L432KC on 2026-10-19, checked with Saleae
     captures, with these sensors:
@@ -367,7 +393,7 @@ edit the copies here.
     with Backspace, and Ctrl-L. The arrow keys do nothing visible: the
     home screen only scrolls the cell, whose five labels already fit, so
     whether they arrive hasn't been seen.
-  * Not yet run on a chip: HMC6352, DS1307, DS3231, MMC56x3, LSM303DLHC,
+  * Not yet run on a chip: the iAQ-Core, HMC6352, DS1307, DS3231, MMC56x3, LSM303DLHC,
     the BMP388, and the PM25 and DS18B20 options. Those drivers have run only
     in Claude-iTransport's host tests, against simulated chips.
 * **The bus clear** has run only on the PC: its code against a simulated
